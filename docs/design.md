@@ -27,9 +27,36 @@
 | `pku/parser` | 校验页面结构，提取课程号、班号、课程名、教师、选课状态及分段时间文本，保留 `<br>` 边界 |
 | `schedule` | 将时间文本归一化为教学周集合、星期、起止节次和地点，再结合校历展开事件 |
 | `calendar` | 将带稳定身份、起止时间和课程信息的事件序列化为 ICS，不接触 HTML |
-| `entrypoints` | 读取配置与 Secrets、调用共用生成流程；分别负责文件、发布或 KV 与 HTTP 行为 |
+| `application` | 校验共用配置，编排课表获取、解析、校历展开与 ICS 生成流程 |
+| `entrypoints` | 读取配置与 Secrets、调用共用生成流程；分别负责文件输出或 KV 与 HTTP 行为 |
 
 解析、校历计算和序列化使用纯函数；网络请求与生成时间由外部传入，便于离线测试。只有确认选课成功的课程进入日历；不得把未知状态、缺失表格或无法识别的时间当作空课表。
+
+### 目录布局
+
+采用单个 TypeScript 项目、两个运行入口；以下为规划结构，目录随实现按需创建。
+
+```text
+src/
+  pku/           # 北大认证、课表请求及 HTML 解析
+  schedule/      # 时间归一化、校历展开、停补课与事件身份
+  calendar/      # ICS 序列化、转义与折行
+  application/   # 共用生成流程、配置校验与模块编排
+  entrypoints/   # Node.js 与 Worker 入口及各自的平台行为
+tests/
+  unit/          # 模块测试
+  integration/   # 完整生成流程、入口一致性及故障行为测试
+  fixtures/      # 合成或脱敏的页面、课程数据与预期结果
+config/          # 可提交的校历、节次配置与配置示例
+docs/            # 系统设计、参考资料及使用说明
+.github/
+  workflows/     # 跨平台 CI、定时生成与 Pages 发布
+```
+
+- `pku/` 内分别设置 `auth`、`elective`、`parser` 模块，无需再建目录层级。`entrypoints/` 分设 Node.js 与 Worker 入口：前者供本地与 Actions 共用，负责配置读取和文件输出；后者负责令牌、KV、刷新及 HTTP 响应。Pages 发布由 workflow 承担。
+- 入口调用 `application`，由它编排 `pku → schedule → calendar`，核心不反向依赖入口。模块导出自己的数据类型，通过明确契约传递，不预设公共 `utils` 或全局 `types` 目录。
+- `config/` 存放配置数据；共用配置校验属于 `application`，环境相关的读取与注入属于入口。网络、时钟等外部能力通过参数传入；文件系统、KV 和部署操作留在对应入口或 workflow。
+- 根目录放置包清单、依赖锁文件、TypeScript、测试与 Wrangler 配置，随实现引入。本地私密数据放在已忽略的 `data/`，凭据使用未跟踪的环境文件；构建及工具缓存目录在引入时加入 `.gitignore`。测试样例不得包含真实个人数据。
 
 ## 3. 校历与事件规则
 
