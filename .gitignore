@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+
+# Private timetable data and generated calendars
+/data/
+*.ics
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
