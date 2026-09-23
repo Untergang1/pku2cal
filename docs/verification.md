@@ -31,3 +31,10 @@
 完整生成流程在 Node 文件入口和 Worker 入口产生相同字节，并在 workerd 与本地 KV 绑定中通过。覆盖六小时缓存边界、失败回退、无副本 `503`、配置隔离、令牌轮换、并发刷新、损坏快照和原子文件替换。Linux 上 Wrangler dry-run 已通过，未向 Cloudflare 发布。
 
 真实页面已通过结构解析。存在已选上课程的时间单元格仅有无法识别的括号文本；依设计整次生成失败，不自动忽略课程或编造时间。当前尚未产出真实账号的可验收日历。
+
+## 交付检查（2026-09-24）
+
+- 本地 Linux / Node.js 22.23.2：从锁文件 `npm ci` 安装成功，审计报告无已知漏洞；`npm run check` 通过类型检查、构建和 54 项测试；`npm run worker:check` 通过 Wrangler dry-run。
+- Markdown 相对链接及 Git diff 空白检查通过；Git 未跟踪 `.env`、`data/`、ICS 或运行时缓存。
+- 已整理 `config/pku-main-2026-2027-1.json`，来源为 [北大官方校历与作息](https://www.pku.edu.cn/detail/3377.html)。该文件没有自动启用，不能替代用户确认账号当前学期。
+- 仍待：学期确认策略、无明确时间课程的处理决定、真实日历日期与课程核对、macOS／托管 Linux CI 执行。公开 Pages 与云端 Worker 未发布。

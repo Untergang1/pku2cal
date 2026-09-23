@@ -50,6 +50,12 @@ describe('time and calendar expansion', () => {
     expect(events[0]!.start).toBe('2026-09-07T00:00:00.000Z');
     expect(events[0]!.end).toBe('2026-09-07T01:50:00.000Z');
   });
+  it('handles leap days and year boundaries without the host timezone', () => {
+    const leap = expandCourses([{ ...course, segments: ['1周 周四1节'] }], { ...config, firstMonday: '2028-02-28' });
+    expect(leap[0]!.originalDate).toBe('2028-03-02');
+    const year = expandCourses([{ ...course, segments: ['1周 周五1节'] }], { ...config, firstMonday: '2026-12-28' });
+    expect(year[0]!.start).toBe('2027-01-01T00:00:00.000Z');
+  });
   it('moves the standard day even if its original date is a holiday, replacing the target', () => {
     const base = expandCourses([course], config);
     const moved = expandCourses([course], { ...config, holidays: ['2026-09-07'], makeups: { '2026-09-09': '2026-09-07' } });

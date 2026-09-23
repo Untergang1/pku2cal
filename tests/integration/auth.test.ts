@@ -76,3 +76,20 @@ it('removes request bodies on POST-to-GET redirects and scopes cookies by path',
   });
   expect((await session.request('https://iaaa.pku.edu.cn/post', { method: 'POST', body: 'synthetic' })).body).toBe('ok');
 });
+
+it('reports timeouts as sanitized network failures', async () => {
+  const session = new Session(async (_url, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('private URL and request')), { once: true });
+  }), 5);
+  await expect(session.request('https://iaaa.pku.edu.cn/')).rejects.toEqual(new PkuError('network'));
+});
+
+it('keeps each generation session independent', async () => {
+  const first = new Session(async () => new Response('ok', { headers: { 'set-cookie': 'first=private; Path=/' } }));
+  await first.request('https://iaaa.pku.edu.cn/');
+  const second = new Session(async (_url, init) => {
+    expect(new Headers(init?.headers).has('cookie')).toBe(false);
+    return new Response('ok');
+  });
+  await second.request('https://iaaa.pku.edu.cn/');
+});
