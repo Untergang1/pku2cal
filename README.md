@@ -4,17 +4,17 @@
 
 ## 项目状态
 
-正在分阶段实现：认证、页面解析、时间展开和 ICS 核心已加入。真实登录与课表请求已验证；学期标识与无明确时间的课程仍影响真实日历验收。验证边界见 [验证记录](docs/verification.md)。
+已实现共用核心、本地生成、GitHub Actions／Pages 和 Cloudflare Worker 入口。Node.js 与本地 Worker 的真实登录和课表获取已验证；学期标识与无明确时间的课程仍阻碍该账号的完整日历验收。验证边界见 [验证记录](docs/verification.md)。
 
 开发使用 Node.js 22（至少 22.12）和 npm，执行 `npm ci`、`npm run check` 完成安装、类型检查、构建和离线测试。Worker 本地运行时使用与 Wrangler 匹配的 Miniflare。
 
 跨平台目标：同一套代码和工具流程支持 macOS 与 Linux 的本地开发、测试、ICS 生成和部署，并通过两种系统的 CI 检查持续验证。
 
-## 计划工作流程
+## 工作流程
 
 北大账号认证 → 获取个人课表 → 解析课程时间与地点 → 生成 ICS → 日历应用订阅。
 
-## 计划部署方式
+## 部署方式
 
 两种方式共用课表处理与 ICS 生成逻辑，提供稳定的订阅地址：
 
@@ -23,7 +23,7 @@
 | 静态 ICS | GitHub Actions 定时获取课表并重新生成 ICS，GitHub Pages 托管产物 | 通过 GitHub Actions 发布到 Pages |
 | 动态 ICS | Cloudflare Worker 动态提供 ICS 订阅响应 | 通过 Wrangler CLI 部署 |
 
-服务端更新后，日历应用仍按自身的订阅刷新机制获取变化。具体配置和部署步骤将在功能实现后补充。
+服务端更新后，日历应用仍按自身的订阅刷新机制获取变化。配置、命令和部署步骤见 [使用说明](docs/usage.md)。
 
 ## 隐私与安全
 

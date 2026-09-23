@@ -47,7 +47,10 @@ export class Session {
         const cookie = await this.jar.getCookieString(url.href);
         headers.delete('cookie');
         if (cookie) headers.set('cookie', cookie);
-        const response = await this.fetcher(url.href, {
+        // Worker fetch is a Web IDL function: invoking it as a Session method
+        // supplies an illegal receiver. Node fetch happens to tolerate that.
+        const fetcher = this.fetcher;
+        const response = await fetcher(url.href, {
           method, ...(body !== undefined ? { body } : {}), headers,
           redirect: 'manual', signal: controller.signal,
         });

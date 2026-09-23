@@ -40,6 +40,14 @@ it('rejects an unexpected redirect without sending a token elsewhere', async () 
   expect(calls).toBe(1);
 });
 
+it('does not bind the injected fetch function to the session instance', async () => {
+  const session = new Session(async function (this: unknown) {
+    expect(this).toBeUndefined();
+    return new Response('ok');
+  });
+  expect((await session.request('https://iaaa.pku.edu.cn/')).body).toBe('ok');
+});
+
 it('bounds redirects and recognizes expired sessions', async () => {
   let calls = 0;
   const session = new Session(async () => {

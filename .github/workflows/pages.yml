@@ -1,0 +1,42 @@
+name: Generate calendar and publish Pages
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: calendar-pages
+  cancel-in-progress: false
+jobs:
+  generate:
+    # Opt-in: Pages calendars are public. Set this only after configuring the calendar.
+    if: ${{ vars.PUBLISH_CALENDAR == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run generate -- --config config/calendar.json --output site/calendar.ics
+        env:
+          PKU_USERNAME: ${{ secrets.PKU_USERNAME }}
+          PKU_PASSWORD: ${{ secrets.PKU_PASSWORD }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+  deploy:
+    needs: generate
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,6 +1,6 @@
 # 系统设计
 
-本文记录首版系统契约，供实现与验收使用。认证、页面解析、时间展开及 ICS 共用核心已实现；各项实测边界见 [验证记录](verification.md)。开发约定见 [AGENTS.md](../AGENTS.md)，上游线索见 [参考资料](reference.md)。
+本文记录首版系统契约，供实现与验收使用。共用核心、本地入口、Pages workflow 与 Worker 入口已实现；各项实测边界见 [验证记录](verification.md)。开发约定见 [AGENTS.md](../AGENTS.md)，上游线索见 [参考资料](reference.md)。
 
 ## 1. 目标与技术路线
 
@@ -77,6 +77,10 @@ docs/            # 系统设计、参考资料及使用说明
 KV 保存最近成功的 ICS、生成时间和配置指纹，按账号、学期及有效配置隔离。成功版本不足 6 小时直接返回；过期或不存在时请求触发刷新，成功才替换副本。刷新失败返回同一配置下的旧版并标示其生成时间；无可用副本时返回 `503`，不能返回空日历。旧版不因超过刷新周期而删除。合并同一 Worker 实例内的并发刷新，不假设 KV 提供全局锁。
 
 成功响应使用 `text/calendar; charset=utf-8`；日历客户端自行决定订阅刷新时间。凭据仅来自 Actions Secrets、Worker Secrets 或未跟踪的本地配置。日志只记录阶段、错误类别和耗时，不记录凭据、会话、原始页面、课表或完整订阅地址。
+
+入口接口：Node 命令为 `npm run generate -- --config <json> --output <ics>`，成功后同目录临时文件原子替换；Worker 使用 `CALENDAR_KV` 绑定和 `PKU_USERNAME`、`PKU_PASSWORD`、`CALENDAR_TOKEN` Secrets。Wrangler 的 custom build 从 `PKU_CONFIG_PATH`（默认 `config/calendar.json`）读取并校验配置，打包进 Worker；不将 Secrets 打包。`npm run worker:check` 使用合成示例完成不发布的构建检查。
+
+Worker 成功响应使用 `Last-Modified` 表示快照生成时间、`X-Calendar-Status: fresh|stale` 标示缓存状态，设置 `Cache-Control: private, no-store`，防止令牌轮换后中间缓存继续提供日历。KV 写入失败也保留旧版；配置错误与无可用副本返回 `503`。Pages workflow 通过仓库变量 `PUBLISH_CALENDAR=true` 显式启用，生成和上传成功后才执行部署。
 
 ## 5. 开发顺序与验收
 
