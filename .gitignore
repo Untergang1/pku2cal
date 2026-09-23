@@ -19,3 +19,13 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# TypeScript / build and runtime caches
+node_modules/
+dist/
+coverage/
+.cache/
+.wrangler/
+.dev.vars
+.dev.vars.*
+/site/

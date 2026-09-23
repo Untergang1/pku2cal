@@ -2,7 +2,7 @@
 
 ## 项目方向
 
-- 将北京大学个人课表转换为可订阅的 ICS；当前尚无功能实现。
+- 将北京大学个人课表转换为可订阅的 ICS；实现进度与验证边界见 README 和 docs/verification.md。
 - 同时支持 GitHub Actions 定时生成 ICS、GitHub Pages 静态发布，以及 Cloudflare Worker 动态提供 ICS；Worker 通过 Wrangler CLI 部署。
 - 两种方式共用认证、课表获取、时间解析和 ICS 生成逻辑，分别设置运行入口；部署相关配置和行为留在对应入口中。
 - 保持认证、页面获取与解析、日历生成、发布或 HTTP 响应的职责清晰，避免上游页面变化影响日历逻辑。不预设语言或框架；选型需兼顾两种运行环境。
