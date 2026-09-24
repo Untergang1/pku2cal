@@ -152,3 +152,7 @@ npm run schedule:pull -- --overwrite
 - **换电脑后如何保留订阅地址？** 私密恢复原来的 `data/pages/` 或 `data/worker/` 状态文件；不要将它们提交到仓库。缺失或损坏时的处理见上述平台进阶说明。
 
 更多资料：[进阶使用](docs/advanced.md) · [开发与维护](docs/development.md) · [系统设计](docs/design.md) · [验证边界](docs/verification.md) · [参考资料与时间表依据](docs/reference.md)。
+
+## 许可证
+
+本项目采用 [MIT 许可证](LICENSE)。第三方依赖及代码仍遵循各自的许可证，参考来源与复用边界见[参考资料](docs/reference.md#上游来源与许可证)。
