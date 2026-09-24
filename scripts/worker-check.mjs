@@ -9,7 +9,7 @@ mkdirSync(configDirectory, { recursive: true });
 const cli = resolve(dirname(require.resolve('wrangler/package.json')), 'bin/wrangler.js');
 const result = spawnSync(process.execPath, [cli, 'deploy', '--dry-run', '--outdir', '.cache/worker-check'], {
   stdio: 'inherit', env: {
-    ...process.env, PKU_CONFIG_PATH: 'config/calendar.example.json',
+    ...process.env, PKU_CONFIG_PATH: 'config/calendar.example.json', PKU_SCHEDULE_PATH: 'config/schedule.example.yaml', PKU_SNAPSHOT_PATH: '',
     WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG_PATH: resolve('.cache/wrangler-logs'),
     XDG_CONFIG_HOME: configDirectory,
     // Never load private local secrets into a build/dry-run.
@@ -25,15 +25,14 @@ if (process.exitCode === 0) {
   const { parse } = await import('jsonc-parser');
   const directory = await mkdtemp(resolve('.cache/worker-setup-check-'));
   try {
-    const config = deploymentConfig(parse(await readFile('wrangler.jsonc', 'utf8')), 'pku2cal-check', 'a'.repeat(32), 'b'.repeat(32));
+    const config = deploymentConfig(parse(await readFile('wrangler.jsonc', 'utf8')), 'pku2cal-check', 'a'.repeat(32));
     const configPath = resolve(directory, 'wrangler.json');
     const secretsPath = resolve(directory, 'secrets.json');
     await saveWorkerFile(configPath, JSON.stringify(config));
-    await saveWorkerFile(secretsPath, JSON.stringify({ PKU_USERNAME: 'synthetic', PKU_PASSWORD: 'synthetic',
-      PKU_UNSCHEDULED_COURSES: '[]', PKU_COURSE_SUPPLEMENTS: 'null', CALENDAR_TOKEN: 't'.repeat(43) }));
+    await saveWorkerFile(secretsPath, JSON.stringify({ CALENDAR_TOKEN: 't'.repeat(43) }));
     await workerCommand(directory, { ...process.env, XDG_CONFIG_HOME: configDirectory })([
       'deploy', '--dry-run', '--config', configPath, '--secrets-file', secretsPath, '--outdir', resolve(directory, 'output'),
-    ], { PKU_CONFIG_PATH: resolve('config/calendar.example.json') });
+    ], { PKU_CONFIG_PATH: resolve('config/calendar.example.json'), PKU_SCHEDULE_PATH: resolve('config/schedule.example.yaml') });
     console.log('Worker setup generated config and synthetic secrets: dry-run passed.');
   } catch {
     console.error('Worker setup generated config dry-run failed.');

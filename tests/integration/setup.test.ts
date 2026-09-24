@@ -6,7 +6,6 @@ import { selectSemester, semesterStatus } from '../../src/application/setup.js';
 import { initializeCalendar, loadPresets } from '../../src/entrypoints/setup.js';
 import { resolveCalendarConfig } from '../../src/entrypoints/calendar-config.js';
 import { assertGenerationAllowed } from '../../src/application/semester.js';
-import { readPrivateConfirmations } from '../../src/entrypoints/node.js';
 
 const now = new Date('2026-09-24T02:00:00Z');
 const directories: string[] = [];
@@ -21,7 +20,7 @@ it('initializes the confirmed autumn semester from the official calendar', async
   expect(automatic.config).not.toHaveProperty('periods');
   expect((await resolveCalendarConfig(automatic.config)).config.periods).toHaveLength(12);
   expect(automatic.config.teachingWeeks).toBe(16);
-  expect(automatic.config.unscheduledCourses).toBeUndefined();
+  expect(automatic.config).not.toHaveProperty('unscheduledCourses');
   expect(() => assertGenerationAllowed(automatic.config, now)).not.toThrow();
 });
 
@@ -64,18 +63,8 @@ it('preserves configuration and namespace when setup is rerun', async () => {
 
 it('explains current, future and expired date status without exposing courses', async () => {
   const config = selectSemester(await loadPresets(), now).config;
-  expect(semesterStatus(config, now).join('\n')).toContain('可以生成');
+  expect(semesterStatus(config, now).join('\n')).toContain('可以拉取');
   expect(semesterStatus(config, new Date('2026-08-01T00:00:00Z')).join('\n')).toContain('尚未开始');
-  expect(semesterStatus(config, new Date('2027-01-11T00:00:00Z')).join('\n')).toContain('停止生成');
+  expect(semesterStatus(config, new Date('2027-01-11T00:00:00Z')).join('\n')).toContain('停止拉取');
   expect(semesterStatus(config, new Date('2026-09-24T16:00:00Z'))[0]).toBe('北京时间：2026-09-25');
-});
-
-it('reads a local private confirmation file and rejects competing sources', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'pku2cal-private-source-')); directories.push(directory);
-  const path = join(directory, 'confirmations.json');
-  await writeFile(path, '[]');
-  expect(await readPrivateConfirmations(undefined, path)).toBe('[]');
-  expect(await readPrivateConfirmations('[]', undefined)).toBe('[]');
-  await expect(readPrivateConfirmations('[]', path)).rejects.toThrow('configuration:invalid');
-  await expect(readPrivateConfirmations(undefined, join(directory, 'missing.json'))).rejects.toThrow();
 });

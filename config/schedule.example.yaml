@@ -1,0 +1,16 @@
+# 合成示例，不包含个人课表。配合 config/calendar.example.json 使用。
+version: 1
+semester: "2026-2027-1"
+courses:
+  - courseId: "SYN001"
+    classId: "01"
+    name: 合成课程
+    teacher: 合成教师
+    slots:
+      - status: scheduled
+        weekday: 1 # 1=周一，7=周日
+        startPeriod: 1
+        endPeriod: 2
+        weeks: "1-4" # 数字或范围，以英文逗号分隔
+        parity: all # all / odd / even
+        location: 示例教室

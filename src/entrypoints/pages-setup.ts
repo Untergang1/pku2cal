@@ -1,15 +1,12 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL, fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { configWithPrivateSupplements, configWithPrivateConfirmations, TimetableConfigError } from '../application/config.js';
-import { assertGenerationAllowed } from '../application/semester.js';
-import { resolveCalendarConfig } from './calendar-config.js';
-import { readPrivateSupplements } from './private-supplements.js';
-import { readPrivateConfirmations } from './node.js';
+import { readLocalSnapshot, withLock, reportLocalError } from './local-data.js';
+import { encodeSnapshot } from '../application/snapshot.js';
 import { newPagesToken, savePagesState, subscriptionUrl, validatePagesToken } from './pages-state.js';
 
 export class PagesSetupError extends Error {}
@@ -21,7 +18,7 @@ export type Command = (program: string, args: string[], input?: string) => Promi
 export const command: Command = (program, args, input) => new Promise(resolveResult => {
   const env: NodeJS.ProcessEnv = { ...process.env, GH_HOST: 'github.com', GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat' };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('PKU_') || ['CALENDAR_TOKEN', 'PAGES_CALENDAR_TOKEN', 'GH_DEBUG', 'DEBUG', 'GH_REPO'].includes(key)) delete env[key];
+    if (key.startsWith('PKU_') || ['CALENDAR_TOKEN', 'PAGES_CALENDAR_TOKEN', 'PAGES_CALENDAR_SNAPSHOT', 'GH_DEBUG', 'DEBUG', 'GH_REPO'].includes(key)) delete env[key];
   }
   const child = execFile(program, args, { env, timeout: 60_000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, (error, stdout) => {
     resolveResult({ code: error ? 1 : 0, stdout });
@@ -54,7 +51,6 @@ export function parseApiResponse(result: CommandResult): { status: number; data:
 export interface PagesDependencies {
   command: Command;
   read: (path: string) => Promise<string>;
-  confirmations: () => Promise<string | undefined>;
   save: (path: string, content: string) => Promise<void>;
   randomToken: () => string;
   env: NodeJS.ProcessEnv;
@@ -69,9 +65,10 @@ const runSchema = z.object({
   head_sha: shaSchema, status: nonempty, conclusion: z.string().nullable(),
 });
 
-export async function setupPages(publish: boolean, d: PagesDependencies, options: { rotateToken?: boolean; forcePublish?: boolean } = {}): Promise<string> {
-  if (!publish) throw new PagesSetupError('Pages 课表将公开可访问。确认后运行 npm run pages:setup -- --publish。');
+export async function setupPages(publish: boolean, d: PagesDependencies, options: { rotateToken?: boolean; forcePublish?: boolean; config?: string | undefined; schedule?: string | undefined } = {}): Promise<string> {
+  if (!publish) throw new PagesSetupError('Pages 课表将公开可访问。确认后运行 npm run pages:publish。');
   if (d.env.GITHUB_ACTIONS === 'true') throw new PagesSetupError('请在本机运行初始化，避免把完整订阅地址写入 Actions 日志。');
+  const snapshot = await readLocalSnapshot(options, d.read, d.now());
   const checked = async (program: string, args: string[], message: string, input?: string): Promise<string> => {
     const result = await d.command(program, args, input);
     if (result.code !== 0) throw new PagesSetupError(message);
@@ -108,33 +105,12 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
   const headPath = `/commits/${encodeURIComponent(repo.default_branch)}`;
   const remoteSha = z.object({ sha: shaSchema }).parse(await api(headPath)).sha;
   if (localSha !== remoteSha) throw new PagesSetupError('本地 HEAD 与远端默认分支不同。请先同步并手动 push 到默认分支，再运行此命令。');
-  await checked('git', ['ls-files', '--error-unmatch', 'config/calendar.json', '.github/workflows/pages.yml'], '请先提交并推送 config/calendar.json 和 Pages 工作流。');
-
-  let secrets: Record<string, string>;
-  try {
-    const { config, source } = await resolveCalendarConfig(JSON.parse(await d.read('config/calendar.json')), file => d.read(fileURLToPath(file)));
-    await checked('git', ['ls-files', '--error-unmatch', `config/timetables/${source.timetable}.json`], '请先提交并推送所选时间表文件。');
-    // Even an empty property is rejected to keep the public/private boundary explicit.
-    if (config.unscheduledCourses !== undefined || !config.semesterBinding) throw new Error();
-    assertGenerationAllowed(config, d.now());
-    const supplements = await readPrivateSupplements(d.env.PKU_COURSE_SUPPLEMENTS, d.env.PKU_COURSE_SUPPLEMENTS_FILE, d.read);
-    const effective = configWithPrivateSupplements(configWithPrivateConfirmations(config, await d.confirmations()), supplements);
-    const username = d.env.PKU_USERNAME;
-    const password = d.env.PKU_PASSWORD;
-    if (!username?.trim() || !password?.trim()) throw new Error();
-    secrets = { PKU_USERNAME: username, PKU_PASSWORD: password,
-      PKU_UNSCHEDULED_COURSES: JSON.stringify(effective.unscheduledCourses ?? []),
-      PKU_COURSE_SUPPLEMENTS: JSON.stringify(effective.courseSupplements ?? null) };
-  } catch (error) {
-    if (error instanceof TimetableConfigError) throw new PagesSetupError(error.guidance);
-    if (error instanceof PagesSetupError) throw error;
-    throw new PagesSetupError('本地配置无效：检查 .env 中的账号密码、私密确认列表和课程补充配置，以及公共校历的学期绑定和有效期；公共校历不得包含 unscheduledCourses 或 courseSupplements。');
-  }
+  await checked('git', ['ls-files', '--error-unmatch', '.github/workflows/pages.yml'], '请先提交并推送新的 Pages 工作流。');
   await api('/actions/workflows/pages.yml');
   const pagesSchema = z.object({ build_type: z.enum(['legacy', 'workflow']), html_url: z.string().url() });
   const existing = await api('/pages', 'GET', undefined, true);
   const pages = existing === null ? null : pagesSchema.parse(existing);
-  d.log('检查通过：远端默认分支与本地提交一致，本地校历和私密配置有效。');
+  d.log('检查通过：远端默认分支与本地提交一致，本地课表快照有效。');
 
   const statePath = `data/pages/${repository.toLowerCase()}.json`;
   let token: string | undefined;
@@ -147,15 +123,17 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
     }
   }
   if (!token && !options.rotateToken) {
-    const remote = await api('/actions/secrets/PAGES_CALENDAR_TOKEN', 'GET', undefined, true);
-    if (remote !== null) throw new PagesSetupError('本地 Pages 令牌文件缺失，但远端已有 Secret。请恢复 data/pages 下的私密文件，或使用 --publish --rotate-token 更换订阅地址。');
+    const remote = await api('/actions/secrets/PAGES_CALENDAR_SNAPSHOT', 'GET', undefined, true);
+    const legacy = await api('/actions/secrets/PAGES_CALENDAR_TOKEN', 'GET', undefined, true);
+    if (remote !== null || legacy !== null) throw new PagesSetupError('本地 Pages 令牌文件缺失，但远端已有 Secret。请恢复 data/pages 下的私密文件，或使用 --rotate-token 更换订阅地址。');
   }
   if (!token || options.rotateToken) {
     token = validatePagesToken(d.randomToken());
     try { await d.save(statePath, JSON.stringify({ repository: repository.toLowerCase(), token }) + '\n'); }
     catch { throw new PagesSetupError('无法保存本地 Pages 令牌，尚未修改远端配置。'); }
   }
-  secrets.PAGES_CALENDAR_TOKEN = token;
+  const payload = encodeSnapshot(snapshot, token);
+  const secrets = { PAGES_CALENDAR_SNAPSHOT: payload.encoded };
   let unchanged = false;
   let stage = '配置 Pages';
   try {
@@ -175,11 +153,11 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
     }
     stage = '开启发布';
     await checked('gh', ['variable', 'set', 'PUBLISH_CALENDAR', '--body', 'true', '--repo', repository], '无法设置 PUBLISH_CALENDAR，请检查 Variables 写入权限。');
-    d.log('PUBLISH_CALENDAR=true 已设置；定时发布已开启。');
+    d.log('PUBLISH_CALENDAR=true 已设置；仅支持手动快照发布。');
     stage = '触发首次发布';
     // Current GitHub API returns the dispatched run ID; never guess from the latest run.
     const dispatched = z.object({ workflow_run_id: z.number().int().positive() }).parse(
-      await api('/actions/workflows/pages.yml/dispatches', 'POST', { ref: repo.default_branch, inputs: { force_publish: options.forcePublish === true || options.rotateToken === true } }),
+      await api('/actions/workflows/pages.yml/dispatches', 'POST', { ref: repo.default_branch, inputs: { snapshot_id: payload.digest, force_publish: options.forcePublish === true || options.rotateToken === true } }),
     );
     const runPath = `/actions/runs/${dispatched.workflow_run_id}`;
     const runUrl = `https://github.com/${repository}/actions/runs/${dispatched.workflow_run_id}`;
@@ -205,8 +183,15 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
         }
         break;
       }
-      d.log('正在等待 GitHub 完成生成和部署…');
+      d.log('正在等待 GitHub 完成快照检查和部署…');
       await d.sleep(10_000);
+    }
+    stage = '清理旧 Secrets';
+    const obsolete = ['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES', 'PKU_COURSE_SUPPLEMENTS', 'PAGES_CALENDAR_TOKEN'];
+    for (const name of obsolete) {
+      try {
+        if (await api(`/actions/secrets/${name}`, 'GET', undefined, true) !== null) await api(`/actions/secrets/${name}`, 'DELETE');
+      } catch { throw new PagesSetupError('发布成功、旧 Secrets 清理未完成；请重跑 pages:publish 完成清理。'); }
     }
     stage = '获取订阅地址';
     const deployed = pagesSchema.parse(await api('/pages'));
@@ -215,24 +200,24 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
     return url;
   } catch (error) {
     const detail = error instanceof PagesSetupError ? error.message : '返回结果不符合预期，请检查 GitHub 设置或网络后重试。';
-    throw new PagesSetupError(`${stage}失败：${detail}\n已完成的配置会保留，未删除既有站点或旧日历。修复后可重新运行；已开启的发布不会自动关闭。`);
+    throw new PagesSetupError(`${stage}失败：${detail}\n已完成的配置会保留，未删除既有站点或旧日历。修复后可重新运行；旧部署保留，超时不会取消远端任务。`);
   }
 }
 
 export async function main(): Promise<void> {
   try {
-    const { values } = parseArgs({ options: { publish: { type: 'boolean' }, 'rotate-token': { type: 'boolean' }, 'force-publish': { type: 'boolean' }, help: { type: 'boolean' } }, strict: true });
+    const { values } = parseArgs({ options: { 'rotate-token': { type: 'boolean' }, 'force-publish': { type: 'boolean' },
+      config: { type: 'string', default: 'config/calendar.json' }, schedule: { type: 'string', default: 'data/schedule.yaml' }, help: { type: 'boolean' } }, strict: true });
     if (values.help) {
-      console.log('用法：npm run pages:setup -- --publish [--force-publish] [--rotate-token]\n先安装 gh 并运行 gh auth login，手动提交并 push 到 origin 的默认分支。\n读取 .env 和 config/calendar.json；保存并复用本地随机令牌，上传 Secrets，检查变化后发布。\n--force-publish 强制发布；--rotate-token 更换令牌并强制发布，旧地址随后失效。');
+      console.log('npm run pages:publish [-- --config config/calendar.json --schedule data/schedule.yaml --force-publish --rotate-token]\n显式公开发布本地课表快照；仅手动触发，不登录北大。先提交并推送代码，登录 gh；私密 YAML 不提交。');
       return;
     }
-    await setupPages(values.publish === true, {
+    await withLock(resolve('data/pages/publish.lock'), () => setupPages(true, {
       command, read: path => readFile(path, 'utf8'), save: savePagesState, randomToken: newPagesToken, env: process.env,
-      confirmations: () => readPrivateConfirmations(process.env.PKU_UNSCHEDULED_COURSES, process.env.PKU_UNSCHEDULED_COURSES_FILE),
       now: () => new Date(), sleep, log: message => console.log(message),
-    }, { rotateToken: values['rotate-token'] === true, forcePublish: values['force-publish'] === true });
+    }, { rotateToken: values['rotate-token'] === true, forcePublish: values['force-publish'] === true, config: values.config, schedule: values.schedule }));
   } catch (error) {
-    console.error(error instanceof PagesSetupError ? error.message : 'Pages 初始化失败，请检查命令参数、GitHub 响应和本地配置。');
+    if (error instanceof PagesSetupError) console.error(error.message); else reportLocalError(error);
     process.exitCode = 1;
   }
 }

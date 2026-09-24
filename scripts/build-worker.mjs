@@ -1,21 +1,21 @@
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { build } from 'esbuild';
-import { TimetableConfigError } from '../dist/application/config.js';
-import { resolveCalendarConfig } from '../dist/entrypoints/calendar-config.js';
+import { saveWorkerFile } from '../dist/entrypoints/worker-state.js';
+import { readLocalSnapshot } from '../dist/entrypoints/local-data.js';
+import { validateSnapshot } from '../dist/application/snapshot.js';
 
 try {
-  const path = resolve(process.env.PKU_CONFIG_PATH || 'config/calendar.json');
-  const { config } = await resolveCalendarConfig(JSON.parse(await readFile(path, 'utf8')));
-  if (config.unscheduledCourses?.length) throw new Error('Use a runtime Secret for private course confirmations');
-  await build({
-    entryPoints: ['src/entrypoints/worker-deploy.ts'], outfile: 'dist/worker.mjs', bundle: true,
+  const snapshot = validateSnapshot(process.env.PKU_SNAPSHOT_PATH
+    ? JSON.parse(await readFile(process.env.PKU_SNAPSHOT_PATH, 'utf8'))
+    : await readLocalSnapshot({ config: process.env.PKU_CONFIG_PATH, schedule: process.env.PKU_SCHEDULE_PATH }));
+  const bundle = await build({
+    entryPoints: ['src/entrypoints/worker-deploy.ts'], outfile: 'dist/worker.mjs', bundle: true, write: false, logLevel: 'silent',
     format: 'esm', platform: 'neutral', target: 'es2022', mainFields: ['module', 'main'],
     conditions: ['workerd', 'browser'], external: ['node:*'],
-    define: { __CALENDAR_CONFIG__: JSON.stringify(config) },
+    define: { __CALENDAR_SNAPSHOT__: JSON.stringify(snapshot) },
   });
-} catch (error) {
-  if (error instanceof TimetableConfigError) console.error(error.guidance);
-  console.error('worker-build:invalid (use a valid public calendar JSON; private course confirmations belong in PKU_UNSCHEDULED_COURSES)');
+  await saveWorkerFile('dist/worker.mjs', bundle.outputFiles[0].text);
+} catch {
+  console.error('worker-build:invalid (run schedule:check; a valid local schedule and calendar are required)');
   process.exitCode = 1;
 }

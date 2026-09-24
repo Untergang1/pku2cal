@@ -2,10 +2,11 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
+import { encodeSnapshot } from '../../src/application/snapshot.js';
 import { calendarIdentity } from '../../src/calendar/compare.js';
 import { main, preparePages } from '../../src/entrypoints/pages-prepare.js';
 import { newPagesToken, savePagesState, subscriptionUrl, validatePagesToken } from '../../src/entrypoints/pages-state.js';
-import { generateFromHtml } from '../../src/application/generate.js';
+import { generateFromHtml } from '../fixtures/pipeline.js';
 import { config, course, timetable } from '../fixtures/timetable.js';
 
 const token = Buffer.alloc(32, 1).toString('base64url');
@@ -17,7 +18,7 @@ async function fixture(response = new Response(first.ics)) {
   const directory = await mkdtemp(join(tmpdir(), 'pku-pages-'));
   directories.push(directory);
   return { token, baseUrl: 'https://calendar.test/project/', force: false, directory,
-    generate: vi.fn(async () => second), fetch: vi.fn<typeof fetch>(async () => response), assertAllowed: vi.fn(),
+    snapshot: second, fetch: vi.fn<typeof fetch>(async () => response),
   };
 }
 
@@ -91,18 +92,10 @@ it('redacts URL-bearing network failures and invalid ICS', async () => {
 it('never stages or fetches after generation failure, even if forced', async () => {
   const options = await fixture();
   options.force = true;
-  options.generate.mockRejectedValue(new Error('generate failed'));
-  await expect(preparePages(options)).rejects.toThrow('generate failed');
+  options.snapshot = { ...second, ics: 'broken' };
+  await expect(preparePages(options)).rejects.toThrow('pages:invalid_calendar');
   expect(options.fetch).not.toHaveBeenCalled();
   expect(await readdir(options.directory)).toEqual([]);
-});
-
-it('rechecks validity before staging and preserves existing staging on expiry', async () => {
-  const options = await fixture(new Response(null, { status: 404 }));
-  options.assertAllowed.mockImplementationOnce(() => {}).mockImplementationOnce(() => { throw new Error('expired'); });
-  await writeFile(join(options.directory, 'sentinel'), 'untouched');
-  await expect(preparePages(options)).rejects.toThrow('expired');
-  expect(await readdir(options.directory)).toEqual(['sentinel']);
 });
 
 it('validates secret paths and supports actual Pages base paths', () => {
@@ -150,7 +143,9 @@ it('emits the runner masking command first and redacts CLI diagnostics', async (
   vi.spyOn(console, 'log').mockImplementation(value => { logs.push(String(value)); });
   vi.spyOn(console, 'error').mockImplementation(value => { errors.push(String(value)); });
   vi.stubEnv('GITHUB_ACTIONS', 'true');
-  vi.stubEnv('PAGES_CALENDAR_TOKEN', token);
+  const payload = encodeSnapshot(second, token);
+  vi.stubEnv('PAGES_CALENDAR_SNAPSHOT', payload.encoded);
+  vi.stubEnv('PAGES_SNAPSHOT_ID', payload.digest);
   vi.stubEnv('PAGES_FORCE_PUBLISH', 'invalid-private-value');
   const exitCode = process.exitCode;
   try {

@@ -1,24 +1,14 @@
 import { constants, generateKeyPairSync, privateDecrypt } from 'node:crypto';
-import { afterAll, describe, expect, it } from 'vitest';
-import type { Miniflare } from 'miniflare';
+import { describe, expect, it } from 'vitest';
 import { authScenario } from '../fixtures/auth-scenario.js';
-import { workerRuntime } from './runtime.js';
 import { Session, PkuError } from '../../src/pku/http.js';
 import { authenticate } from '../../src/pku/auth.js';
 
 const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const pem = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString();
-let mf: Miniflare | undefined;
-afterAll(async () => { await mf?.dispose(); });
-
-describe('authentication protocol in both runtimes', () => {
-  for (const runtime of ['node', 'worker']) it(runtime, async () => {
-    let result: Awaited<ReturnType<typeof authScenario>>;
-    if (runtime === 'node') result = await authScenario(pem);
-    else {
-      mf = await workerRuntime('tests/fixtures/auth-worker.ts');
-      result = await (await mf.dispatchFetch('http://localhost/', { method: 'POST', body: pem })).json() as typeof result;
-    }
+describe('authentication protocol in Node', () => {
+  it('authenticates with an isolated session', async () => {
+    const result = await authScenario(pem);
     expect(result.html).toContain('synthetic timetable');
     expect(result.calls).toBe(5);
     // Inspect the padded block without relying on OpenSSL's PKCS#1 decryption policy.

@@ -11,25 +11,26 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "check": "npm run typecheck && npm run build && npm test",
-    "probe": "npm run build && node --env-file-if-exists=.env scripts/probe.mjs",
-    "probe:worker": "node --env-file-if-exists=.env scripts/probe-worker.mjs",
-    "generate": "npm run build && node --env-file-if-exists=.env dist/entrypoints/node.js",
+    "generate": "npm run build && node dist/entrypoints/node.js",
     "setup": "npm run build && node dist/entrypoints/setup.js",
     "status": "npm run build && node dist/entrypoints/node.js --status",
-    "pages:setup": "npm run build && node --env-file-if-exists=.env dist/entrypoints/pages-setup.js",
     "worker:check": "node scripts/worker-check.mjs",
     "worker:build": "npm run build && node scripts/build-worker.mjs",
     "worker:dev": "wrangler dev",
-    "worker:deploy": "wrangler deploy",
-    "worker:setup": "npm run build && node --env-file-if-exists=.env dist/entrypoints/worker-setup.js",
+    "worker:deploy": "npm run build && node dist/entrypoints/worker-setup.js",
     "token": "node -e \"console.log(require('node:crypto').randomBytes(32).toString('base64url'))\"",
-    "pages:prepare": "npm run build && node --env-file-if-exists=.env dist/entrypoints/pages-prepare.js"
+    "pages:prepare": "npm run build && node dist/entrypoints/pages-prepare.js",
+    "schedule:pull": "npm run build && node --env-file-if-exists=.env dist/entrypoints/schedule-pull.js",
+    "schedule:migrate": "npm run build && node --env-file-if-exists=.env dist/entrypoints/schedule-pull.js --migrate",
+    "schedule:check": "npm run build && node dist/entrypoints/node.js --check",
+    "pages:publish": "npm run build && node dist/entrypoints/pages-setup.js"
   },
   "dependencies": {
     "cheerio": "1.2.0",
+    "ical.js": "2.2.1",
     "tough-cookie": "6.0.2",
-    "zod": "4.6.5",
-    "ical.js": "2.2.1"
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "22.20.4",

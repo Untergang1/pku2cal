@@ -1,11 +1,8 @@
 import ICAL from 'ical.js';
 import { describe, expect, it } from 'vitest';
-import { configWithPrivateSupplements, validateConfig, validateSourceConfig } from '../../src/application/config.js';
-import { generateFromHtml } from '../../src/application/generate.js';
-import { errorCategory } from '../../src/application/log.js';
-import { expandCourses } from '../../src/schedule/expand.js';
-import { SupplementError } from '../../src/schedule/supplements.js';
-import { cacheIdentity } from '../../src/entrypoints/worker.js';
+import { configWithPrivateSupplements, validateSourceConfig } from '../../src/migration/config.js';
+import { generateFromHtml } from '../fixtures/legacy.js';
+import { expandCourses } from '../fixtures/legacy.js';
 import { config, course, timetable } from '../fixtures/timetable.js';
 import { supplements } from '../fixtures/supplements.js';
 
@@ -99,35 +96,10 @@ describe('private course supplements', () => {
     expect(() => generateFromHtml('invalid', withSupplements(), now)).toThrow('parse:structure');
     expect(() => expandCourses([{ ...course, segments: ['无法解析'] }], withSupplements())).toThrow('schedule:time');
   });
-  it('canonicalizes order without modifying input and isolates changed supplements', () => {
-    const value = { ...supplements, locations: [...supplements.locations, { courseId: 'SYN005', classId: '01', location: '教室' }],
-      courses: [{ ...manual, slots: [slot, { ...slot, weekday: 5 }] }, { ...manual, courseId: 'SYN004' }] };
-    const before = JSON.stringify(value);
-    const first = withSupplements(value);
-    expect(JSON.stringify(value)).toBe(before);
-    const reordered = withSupplements({ ...value, locations: [...value.locations].reverse(), courses: [...value.courses].reverse()
-      .map(c => ({ ...c, slots: [...c.slots].reverse() })) });
-    expect(cacheIdentity(first, 'synthetic')).toEqual(cacheIdentity(reordered, 'synthetic'));
-    expect(cacheIdentity(first, 'synthetic')).not.toEqual(cacheIdentity(withSupplements(), 'synthetic'));
-    expect(cacheIdentity(first, 'synthetic')).not.toEqual(cacheIdentity(withSupplements({ ...value,
-      locations: value.locations.map(l => ({ ...l, location: 'changed' })) }), 'synthetic'));
-  });
-  it('preserves the old serialized config and fingerprint when disabled or empty', () => {
-    const original = validateConfig(config);
-    for (const json of [undefined, '', '  ', 'null', JSON.stringify({ semester: config.semester, locations: [], courses: [] })]) {
-      const result = configWithPrivateSupplements(config, json);
-      expect(JSON.stringify(result)).toBe(JSON.stringify(original));
-      expect(cacheIdentity(result, 'synthetic')).toEqual(cacheIdentity(original, 'synthetic'));
-    }
-    expect(() => withSupplements({ semester: '2025-2026-1', locations: [], courses: [] })).toThrow('supplements:invalid');
-  });
   it('rejects public embedding and competing runtime inputs', () => {
     const { periods: _periods, ...source } = config;
     expect(() => validateSourceConfig({ ...source, timetable: 'pku-main', courseSupplements: supplements })).toThrow('configuration:invalid');
     expect(() => configWithPrivateSupplements(withSupplements(), 'null')).toThrow('supplements:invalid');
     expect(() => configWithPrivateSupplements(config, '{broken')).toThrow('supplements:invalid');
-  });
-  it('exposes only fixed error categories', () => {
-    expect(errorCategory(new SupplementError('conflict'))).toBe('supplements:conflict');
   });
 });

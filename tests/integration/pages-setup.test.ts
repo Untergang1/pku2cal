@@ -1,5 +1,4 @@
-import { resolve } from 'node:path';
-import { supplements } from '../fixtures/supplements.js';
+import { decodeSnapshot } from '../../src/application/snapshot.js';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -10,7 +9,6 @@ const sha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
 const config = JSON.parse(await readFile(new URL('../../config/pku-main-2026-2027-1.json', import.meta.url), 'utf8'));
 config.semesterBinding = { confirmedSemester: '2026-2027-1', validFrom: '2026-09-07', validThrough: '2027-01-10' };
-const confirmation = [{ semester: '2026-2027-1', courseId: 'SYN002', classId: '01', confirmed: true, expectedSegments: ['(synthetic private decision)'] }];
 const response = (data: unknown, status = 200): CommandResult => ({
   code: status >= 400 ? 1 : 0,
   stdout: `HTTP/2.0 ${status} Test\r\nContent-Type: application/json\r\n\r\n${data === null ? '' : JSON.stringify(data)}`,
@@ -31,8 +29,9 @@ function fixture(options: {
   let reads = 0;
   let pagesRead = 0;
   const d: PagesDependencies = {
-    env: { PKU_USERNAME: 'synthetic-user', PKU_PASSWORD: 'synthetic-password' },
+    env: {},
     read: async path => {
+      if (path === 'data/schedule.yaml') return JSON.stringify({ version: 1, semester: '2026-2027-1', courses: [] });
       if (path === 'config/calendar.json') return JSON.stringify({ ...config, timetable: options.selectedTimetable ?? config.timetable });
       for (const id of ['pku-main', 'pku-ss']) {
         const file = new URL(`../../config/timetables/${id}.json`, import.meta.url);
@@ -41,7 +40,7 @@ function fixture(options: {
       if (saved.has(path)) return saved.get(path)!;
       throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     },
-    save: async (path, content) => { saved.set(path, content); }, randomToken: () => token, confirmations: async () => JSON.stringify(confirmation),
+    save: async (path, content) => { saved.set(path, content); }, randomToken: () => token,
     now: () => new Date(clock), sleep: async () => { clock += 5 * 60_000; }, log: value => logs.push(value),
     command: async (program, args, input) => {
       calls.push({ program, args, input });
@@ -54,7 +53,7 @@ function fixture(options: {
           'remote get-url --push origin': 'git@github.com:calendar-owner/calendar.git',
           'rev-parse HEAD': sha,
           'ls-files --error-unmatch config/timetables/pku-main.json': 'config/timetables/pku-main.json',
-          'ls-files --error-unmatch config/calendar.json .github/workflows/pages.yml': 'config/calendar.json\n.github/workflows/pages.yml',
+          'ls-files --error-unmatch .github/workflows/pages.yml': 'config/calendar.json\n.github/workflows/pages.yml',
         };
         if (!(key in output)) throw new Error(`Unexpected git command: ${key}`);
         return { code: 0, stdout: output[key]! };
@@ -68,6 +67,7 @@ function fixture(options: {
           if (path.endsWith('/dispatches')) return response(options.dispatchId === false ? null : { workflow_run_id: 123 });
           return response(null, method === 'POST' ? 201 : 204);
         }
+        if (path.startsWith('/actions/secrets/') && !path.endsWith('/PAGES_CALENDAR_TOKEN')) return response(null, 404);
         switch (path) {
           case '': return response({ default_branch: 'main', archived: false, permissions: { push: true } });
           case '/commits/main': return response({ sha: ++reads > 1 && options.changedSha ? otherSha : options.remoteSha ?? sha });
@@ -111,7 +111,7 @@ it.each(['https://secret@github.com/person/repo.git', 'https://example.com/perso
 
 it('requires explicit publication consent before running any command', async () => {
   const f = fixture();
-  await expect(setupPages(false, f.d)).rejects.toThrow('--publish');
+  await expect(setupPages(false, f.d)).rejects.toThrow('pages:publish');
   expect(f.calls).toEqual([]);
 });
 
@@ -145,16 +145,18 @@ it('requires a registered remote workflow before uploading anything', async () =
   expect(f.writes()).toEqual([]);
 });
 
-it.each(['credentials', 'private-config', 'expired', 'unbound', 'confirmations'])('rejects invalid %s before mutation', async kind => {
+it('rejects missing local YAML before mutation', async () => {
   const f = fixture();
   const read = f.d.read;
-  if (kind === 'credentials') f.d.env = {};
-  if (kind === 'private-config') f.d.read = async path => path === 'config/calendar.json' ? JSON.stringify({ ...config, unscheduledCourses: [] }) : read(path);
-  if (kind === 'expired') f.d.now = () => new Date('2027-01-11T00:00:00Z');
-  if (kind === 'unbound') f.d.read = async path => path === 'config/calendar.json' ? JSON.stringify({ ...config, semesterBinding: undefined }) : read(path);
-  if (kind === 'confirmations') f.d.confirmations = async () => 'invalid synthetic-private-json';
-  await expect(setupPages(true, f.d)).rejects.toThrow('本地配置无效');
+  f.d.read = async path => { if (path === 'data/schedule.yaml') throw new Error(); return read(path); };
+  await expect(setupPages(true, f.d)).rejects.toThrow('无法读取课表');
   expect(f.writes()).toEqual([]);
+});
+
+it('publishes offline after the old import window without credentials', async () => {
+  const f = fixture();
+  f.d.now = () => new Date('2030-01-01T00:00:00Z');
+  expect(await setupPages(true, f.d)).toContain(token);
 });
 
 it.each([401, 403, 500])('does not confuse Pages HTTP %s with an absent site', async status => {
@@ -173,9 +175,11 @@ it.each(['missing', 'legacy', 'workflow'] as const)('configures a %s Pages site 
     expect(JSON.parse(siteWrites[0].input!)).toEqual({ build_type: 'workflow' });
   }
   const secrets = f.writes().filter(c => c.args[0] === 'secret');
-  expect(secrets.map(c => c.args[2])).toEqual(['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES', 'PKU_COURSE_SUPPLEMENTS', 'PAGES_CALENDAR_TOKEN']);
-  expect(secrets[1]!.input).toBe('synthetic-password');
-  expect(JSON.parse(secrets[2]!.input!)).toEqual(confirmation);
+  expect(secrets.map(c => c.args[2])).toEqual(['PAGES_CALENDAR_SNAPSHOT']);
+  const dispatch = f.calls.find(c => c.args[1]?.endsWith('/dispatches'))!;
+  const decoded = decodeSnapshot(secrets[0]!.input!, JSON.parse(dispatch.input!).inputs.snapshot_id);
+  expect(decoded.token).toBe(token);
+  expect(decoded.ics).toContain('BEGIN:VCALENDAR');
   for (const c of secrets) expect(c.args).toContain('calendar-owner/calendar');
   expect(f.calls.map(c => c.args.join(' ')).join('\n')).not.toContain('synthetic-password');
   expect(f.logs.join('\n')).not.toMatch(/synthetic-user|synthetic-password|SYN002/);
@@ -183,13 +187,6 @@ it.each(['missing', 'legacy', 'workflow'] as const)('configures a %s Pages site 
   expect(writes.at(-2)!.args[0]).toBe('variable');
   expect(writes.at(-1)!.args[1]).toContain('/dispatches');
   expect(f.logs).toContain('本次运行：https://github.com/calendar-owner/calendar/actions/runs/123');
-});
-
-it('replaces previous remote confirmations with an empty list when none are configured locally', async () => {
-  const f = fixture({ pages: 'workflow' });
-  f.d.confirmations = async () => undefined;
-  await setupPages(true, f.d);
-  expect(f.calls.find(c => c.args[2] === 'PKU_UNSCHEDULED_COURSES')?.input).toBe('[]');
 });
 
 it('uses the actual custom Pages address without changing its domain settings', async () => {
@@ -290,7 +287,7 @@ it('rotates explicitly and forces publication, then reuses the saved token on re
   await setupPages(true, f.d, { rotateToken: true });
   expect(JSON.parse(f.saved.get('data/pages/calendar-owner/calendar.json')!).token).toBe(token);
   const dispatch = f.calls.find(c => c.args[1]?.endsWith('/dispatches'))!;
-  expect(JSON.parse(dispatch.input!).inputs).toEqual({ force_publish: true });
+  expect(JSON.parse(dispatch.input!).inputs).toMatchObject({ force_publish: true, snapshot_id: expect.stringMatching(/^[a-f0-9]{64}$/) });
   await setupPages(true, f.d);
   expect(f.calls.filter(c => c.args[2] === 'PAGES_CALENDAR_TOKEN').every(c => c.input === token)).toBe(true);
 });
@@ -313,26 +310,17 @@ it('rejects Actions execution before exposing a local subscription URL', async (
 
 it('rejects the unfilled SS table before uploading secrets or changing GitHub settings', async () => {
   const f = fixture({ selectedTimetable: 'pku-ss' });
-  await expect(setupPages(true, f.d)).rejects.toThrow('config/timetables/pku-ss.json');
+  await expect(setupPages(true, f.d)).rejects.toMatchObject({ guidance: expect.stringContaining('config/timetables/pku-ss.json') });
   expect(f.calls.some(call => call.args.includes('--method') && call.args[call.args.indexOf('--method') + 1] !== 'GET')).toBe(false);
 });
 
 
-it('uploads private supplements by content and clears them on a later setup', async () => {
-  const f = fixture();
-  f.d.env.PKU_COURSE_SUPPLEMENTS_FILE = 'data/synthetic-supplements.json';
-  f.saved.set(resolve('data/synthetic-supplements.json'), JSON.stringify(supplements));
-  await setupPages(true, f.d);
-  expect(JSON.parse(f.calls.find(c => c.args[2] === 'PKU_COURSE_SUPPLEMENTS')!.input!)).toEqual(supplements);
-  expect(f.logs.join('\n')).not.toMatch(/SYN003|合成单周课程|手动教室/);
-  delete f.d.env.PKU_COURSE_SUPPLEMENTS_FILE;
-  await setupPages(true, f.d);
-  expect(f.calls.filter(c => c.args[2] === 'PKU_COURSE_SUPPLEMENTS').at(-1)?.input).toBe('null');
-});
-
-it('rejects invalid supplements before changing GitHub state', async () => {
-  const f = fixture();
-  f.d.env.PKU_COURSE_SUPPLEMENTS = '{private-invalid-json';
-  await expect(setupPages(true, f.d)).rejects.toThrow('本地配置无效');
-  expect(f.writes()).toEqual([]);
+it('reports successful publication separately from old secret cleanup failure', async () => {
+  const f = fixture({ localToken: token });
+  const command = f.d.command;
+  f.d.command = async (program, args, input) => {
+    if (args[1]?.endsWith('/actions/secrets/PKU_PASSWORD')) return args.includes('GET') ? response({ name: 'PKU_PASSWORD' }) : response({}, 403);
+    return command(program, args, input);
+  };
+  await expect(setupPages(true, f.d)).rejects.toThrow('发布成功、旧 Secrets 清理未完成');
 });

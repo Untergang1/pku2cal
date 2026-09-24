@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
-import type { RawCourse } from '../pku/parser.js';
-import { addDays, ScheduleError } from './time.js';
-import type { UnscheduledCourseConfirmation } from './unscheduled.js';
-import { supplementCourses, type CourseSupplements } from './supplements.js';
+import { addDays, ScheduleError, type Slot } from './time.js';
+
+export interface ScheduledCourse { courseId: string; classId: string; name: string; teacher: string; slots: Slot[] }
 
 export interface ScheduleConfig {
   namespace: string;
@@ -12,8 +11,6 @@ export interface ScheduleConfig {
   periods: { period: number; start: string; end: string }[];
   holidays: string[];
   makeups: Record<string, string>;
-  courseSupplements?: CourseSupplements | undefined;
-  unscheduledCourses?: UnscheduledCourseConfirmation[] | undefined;
 }
 export interface CalendarEvent {
   uid: string;
@@ -25,7 +22,7 @@ export interface CalendarEvent {
   description: string;
 }
 
-export function expandCourses(courses: RawCourse[], config: ScheduleConfig): CalendarEvent[] {
+export function expandCourses(courses: ScheduledCourse[], config: ScheduleConfig): CalendarEvent[] {
   const moved = new Map(Object.entries(config.makeups).map(([target, source]) => [source, target]));
   const targets = new Set(Object.keys(config.makeups));
   const cancelled = new Set(config.holidays);
@@ -33,9 +30,6 @@ export function expandCourses(courses: RawCourse[], config: ScheduleConfig): Cal
   const events: CalendarEvent[] = [];
   const identities = new Set<string>();
   for (const course of courses) {
-    if (!course.courseId || !course.classId || !course.name || !course.segments.length) throw new ScheduleError('time');
-  }
-  for (const course of supplementCourses(courses, config, config.courseSupplements)) {
     for (const slot of course.slots) {
       const mappedPeriods = [];
       for (let p = slot.startPeriod; p <= slot.endPeriod; p++) {

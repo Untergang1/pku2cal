@@ -44,18 +44,18 @@ export function selectSemester(presets: SemesterPreset[], now: Date, semester?: 
 }
 
 export function semesterStatus(config: SemesterConfig, now: Date): string[] {
-  let state = '可以生成';
+  let state = '可以拉取';
   try { assertGenerationAllowed(config, now); }
   catch (error) {
     if (!(error instanceof SemesterWindowError) || error.code === 'invalid_clock') throw error;
-    state = error.code === 'not_started' ? '尚未开始，暂不生成' : '学期已结束，停止生成';
+    state = error.code === 'not_started' ? '尚未开始，暂不拉取' : '学期已结束，停止拉取';
   }
   const date = new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const binding = config.semesterBinding;
   return [
     `北京时间：${date}`,
     `已选学期：${config.semester}`,
-    binding ? `生成有效期：${binding.validFrom} 至 ${binding.validThrough}（含首尾两天）` : '学期尚未绑定；生成时需要上游提供匹配的学期标识。',
+    binding ? `拉取有效期：${binding.validFrom} 至 ${binding.validThrough}（含首尾两天）` : '学期尚未绑定；拉取时需要上游提供匹配的学期标识。',
     ...(binding ? [`日期检查：${state}`] : []),
   ];
 }

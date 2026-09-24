@@ -28,7 +28,7 @@ export function workerCommandEnv(parent: NodeJS.ProcessEnv, directory: string, e
   const env = { ...parent };
   for (const key of Object.keys(env)) {
     if (key.startsWith('PKU_') || key.startsWith('WRANGLER_') || key.startsWith('CLOUDFLARE_')
-      || key.startsWith('CF_') || ['CALENDAR_TOKEN', 'PAGES_CALENDAR_TOKEN', 'DEBUG', 'NODE_DEBUG', 'NODE_OPTIONS'].includes(key)) delete env[key];
+      || key.startsWith('CF_') || ['CALENDAR_TOKEN', 'PAGES_CALENDAR_TOKEN', 'PAGES_CALENDAR_SNAPSHOT', 'DEBUG', 'NODE_DEBUG', 'NODE_OPTIONS'].includes(key)) delete env[key];
   }
   // Only documented authentication inputs are inherited. Deployment always pins the account.
   for (const key of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL']) {
@@ -60,15 +60,14 @@ export function cloudflareReader(token: string, account: string, request: typeof
 }
 
 /** Never log the URL, response body, or underlying fetch error. */
-export async function verifyWorker(url: string, request: typeof fetch, sleep: (ms: number) => Promise<unknown>): Promise<void> {
+export async function verifyWorker(url: string, request: typeof fetch, sleep: (ms: number) => Promise<unknown>, expectedIcs: string): Promise<void> {
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       const response = await request(url, { redirect: 'error', signal: AbortSignal.timeout(30_000), cache: 'no-store' });
       if (response.status === 200 && response.headers.get('content-type')?.split(';')[0]?.trim() === 'text/calendar'
-        && response.headers.get('x-calendar-status') === 'fresh'
         && response.headers.get('cache-control')?.includes('no-store')
         && Number.isFinite(Date.parse(response.headers.get('last-modified') ?? ''))) {
-        calendarIdentity(await response.text());
+        if (calendarIdentity(await response.text()) !== calendarIdentity(expectedIcs)) throw new Error();
         const invalid = new URL(url);
         invalid.pathname = '/calendar/invalid.ics';
         const denied = await request(invalid.href, { redirect: 'error', signal: AbortSignal.timeout(30_000), cache: 'no-store' });
@@ -77,5 +76,5 @@ export async function verifyWorker(url: string, request: typeof fetch, sleep: (m
     } catch { /* Propagation, transient upstream failures, and malformed calendars are all unverified. */ }
     if (attempt < 5) await sleep(5_000);
   }
-  throw new WorkerSetupError('代码已部署，但云端日历验证未通过（需 fresh ICS 和错误令牌 404）。请检查云端访问北大、凭据、学期和课程确认后重试；已部署资源保留。');
+  throw new WorkerSetupError('代码已部署，但云端日历验证未通过（需与本次快照一致的 ICS 和错误令牌 404）。请检查云端配置与网络后重试；已部署资源保留。');
 }

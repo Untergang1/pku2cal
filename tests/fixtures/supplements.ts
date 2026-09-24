@@ -1,4 +1,4 @@
-import type { CourseSupplements } from '../../src/schedule/supplements.js';
+import type { CourseSupplements } from '../../src/migration/supplements.js';
 import { config, course } from './timetable.js';
 
 export const supplements: CourseSupplements = {

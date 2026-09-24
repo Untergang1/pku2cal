@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import ICAL from 'ical.js';
 import { parseTime } from '../../src/schedule/time.js';
-import { expandCourses } from '../../src/schedule/expand.js';
+import { expandCourses } from '../fixtures/pipeline.js';
 import { parseTimetable } from '../../src/pku/parser.js';
 import { validateConfig } from '../../src/application/config.js';
-import { generateFromHtml } from '../../src/application/generate.js';
+import { generateFromHtml } from '../fixtures/pipeline.js';
 import { serializeCalendar } from '../../src/calendar/ics.js';
 import { config, course, timetable } from '../fixtures/timetable.js';
 
@@ -72,8 +72,8 @@ describe('time and calendar expansion', () => {
     expect(expandCourses([course], { ...config, semester: '2027-2028-1' })[0]!.uid).not.toBe(base[0]);
   });
   it('rejects overlapping identities and missing periods', () => {
-    expect(() => expandCourses([{ ...course, segments: [...course.segments, course.segments[0]!] }], config)).toThrow('schedule:duplicate');
-    expect(() => expandCourses([course], { ...config, periods: config.periods.slice(0, 1) })).toThrow('schedule:periods');
+    expect(() => expandCourses([{ ...course, segments: [...course.segments, course.segments[0]!] }], config)).toThrow('重复事件');
+    expect(() => expandCourses([course], { ...config, periods: config.periods.slice(0, 1) })).toThrow('缺少节次');
   });
   it.each([
     { firstMonday: '2026-09-08' }, { firstMonday: '2026-02-30' }, { teachingWeeks: 0 },

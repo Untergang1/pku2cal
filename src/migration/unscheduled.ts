@@ -1,5 +1,5 @@
 import type { RawCourse } from '../pku/parser.js';
-import { parseTime, ScheduleError } from './time.js';
+import { parseTime, ScheduleError } from '../schedule/time.js';
 
 export interface UnscheduledCourseConfirmation {
   semester: string;

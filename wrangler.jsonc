@@ -6,9 +6,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "no_bundle": true,
   "build": { "command": "npm run build && node scripts/build-worker.mjs" },
-  "kv_namespaces": [
-    { "binding": "CALENDAR_KV", "id": "00000000000000000000000000000000" }
-  ],
+  "vars": { "PKU2CAL_MODE": "snapshot-v1" },
   "observability": { "enabled": false },
-  "upload_source_maps": false
+  "upload_source_maps": false,
+  "workers_dev": true,
+  "preview_urls": false
 }

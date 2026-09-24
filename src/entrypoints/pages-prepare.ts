@@ -1,26 +1,19 @@
-import { appendFile, mkdir, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { calendarIdentity } from '../calendar/compare.js';
-import { errorCategory } from '../application/log.js';
-import { SupplementError } from '../schedule/supplements.js';
-import { configWithPrivateSupplements, configWithPrivateConfirmations, validateConfig, TimetableConfigError } from '../application/config.js';
-import { generateCalendar, type GeneratedCalendar } from '../application/generate.js';
-import { assertGenerationAllowed } from '../application/semester.js';
-import { resolveCalendarConfig } from './calendar-config.js';
-import { readPrivateSupplements } from './private-supplements.js';
-import { readPrivateConfirmations } from './node.js';
+import type { GeneratedCalendar } from '../application/generate.js';
+import { decodeSnapshot } from '../application/snapshot.js';
 import { savePagesState, subscriptionUrl, validatePagesToken } from './pages-state.js';
 
 export interface PagesDecision { changed: boolean; reason: 'missing' | 'changed' | 'unchanged' | 'forced' }
 
 export async function preparePages(options: {
   token: string; baseUrl: string; force: boolean; directory: string;
-  generate: () => Promise<GeneratedCalendar>; fetch: typeof fetch; assertAllowed: () => void;
+  snapshot: GeneratedCalendar; fetch: typeof fetch;
 }): Promise<PagesDecision> {
   const url = subscriptionUrl(options.baseUrl, options.token);
-  options.assertAllowed();
-  const candidate = await options.generate();
+  const candidate = options.snapshot;
   const identity = calendarIdentity(candidate.ics);
   let reason: PagesDecision['reason'] = 'forced';
   if (!options.force) {
@@ -38,7 +31,6 @@ export async function preparePages(options: {
     }
   }
   if (reason === 'unchanged') return { changed: false, reason };
-  options.assertAllowed();
   // This is a dedicated, ignored staging directory, never an existing deployment.
   await rm(options.directory, { recursive: true, force: true });
   await mkdir(options.directory, { recursive: true });
@@ -48,27 +40,17 @@ export async function preparePages(options: {
 
 export async function main(): Promise<void> {
   try {
-    const token = validatePagesToken(process.env.PAGES_CALENDAR_TOKEN ?? '');
-    // upload-pages-artifact lists file paths while archiving. Mask before any such output.
+    const snapshot = decodeSnapshot(process.env.PAGES_CALENDAR_SNAPSHOT ?? '', process.env.PAGES_SNAPSHOT_ID ?? '');
+    const token = validatePagesToken(snapshot.token);
     if (process.env.GITHUB_ACTIONS === 'true') console.log(`::add-mask::${token}`);
     const force = process.env.PAGES_FORCE_PUBLISH ?? 'false';
     if (!['true', 'false'].includes(force)) throw new Error();
-    const confirmations = await readPrivateConfirmations(process.env.PKU_UNSCHEDULED_COURSES, process.env.PKU_UNSCHEDULED_COURSES_FILE);
-    const selected = await resolveCalendarConfig(JSON.parse(await readFile('config/calendar.json', 'utf8')));
-    const supplements = await readPrivateSupplements(process.env.PKU_COURSE_SUPPLEMENTS, process.env.PKU_COURSE_SUPPLEMENTS_FILE);
-    const config = configWithPrivateSupplements(configWithPrivateConfirmations(selected.config, confirmations), supplements);
-    const decision = await preparePages({
-      token, baseUrl: process.env.PAGES_BASE_URL ?? '', force: force === 'true', directory: resolve('site'),
-      generate: () => generateCalendar(config, { username: process.env.PKU_USERNAME ?? '', password: process.env.PKU_PASSWORD ?? '' }, { fetch, now: () => new Date() }),
-      fetch, assertAllowed: () => assertGenerationAllowed(validateConfig(config), new Date()),
-    });
+    const decision = await preparePages({ token, baseUrl: process.env.PAGES_BASE_URL ?? '', force: force === 'true',
+      directory: resolve('site'), snapshot, fetch });
     if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `changed=${decision.changed}\nreason=${decision.reason}\n`);
     console.log(`Pages check: ${decision.reason}`);
   } catch (error) {
-    if (error instanceof TimetableConfigError) console.error(error.guidance);
-    console.error(`生成错误类别：${errorCategory(error)}`);
-    if (error instanceof SupplementError) console.error('请复核私密课程补充配置，移除与系统课程或其他配置重复的课程及重复时段。');
-    console.error('Pages 检查失败：请检查配置、令牌、校历有效期、上游获取及线上日历响应；本次未上传或部署。');
+    console.error('Pages 快照检查失败：请检查快照大小、摘要、令牌与线上响应；本次未上传或部署。');
     process.exitCode = 1;
   }
 }

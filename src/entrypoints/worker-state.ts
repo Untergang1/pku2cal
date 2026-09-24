@@ -8,8 +8,10 @@ export const workerName = z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])
 export const workerToken = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
   .refine(value => Buffer.from(value, 'base64url').toString('base64url') === value);
 export const workerState = z.object({
-  accountId: cloudflareId, name: workerName, token: workerToken, namespaceId: cloudflareId.optional(),
+  accountId: cloudflareId, name: workerName, token: workerToken,
 }).strict();
+// Only the migration path reads the old namespace; normal state has no KV binding.
+export const legacyWorkerState = workerState.extend({ namespaceId: cloudflareId }).strict();
 export const newWorkerToken = () => randomBytes(32).toString('base64url');
 
 /** Persist the token before any remote mutation, including a rotation. */

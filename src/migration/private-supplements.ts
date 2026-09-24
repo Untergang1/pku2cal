@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { SupplementError } from '../schedule/supplements.js';
+import { SupplementError } from './supplements.js';
 
-/** File access stays in Node entrypoints; Worker receives JSON through its Secret. */
+/** Read archived private sources only during explicit one-time migration. */
 export async function readPrivateSupplements(
   inline: string | undefined, file: string | undefined,
   read: (path: string) => Promise<string> = path => readFile(path, 'utf8'),

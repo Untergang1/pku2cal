@@ -11,9 +11,9 @@ elective.pku.edu.cn
   ↓
 个人已选课程
   ↓
-课程时间解析
+手动导入并编辑 data/schedule.yaml
   ↓
-ICS
+本地生成 ICS
   ↓
 HTTP subscription endpoint
 ```
@@ -267,6 +267,6 @@ Use this as a behavioral reference only if possible. Sleepy is GPL-3.0; avoid co
 
 ## 本项目的实现边界
 
-目录和数据契约以 [系统设计](design.md) 为准。`pku` 负责内存会话、页面获取和结构解析，`schedule` 处理时间和校历，`calendar` 序列化 ICS，`application` 编排，两个 `entrypoints` 处理平台行为。本项目不持久化上游会话，Worker KV 仅存成功日历快照。
+目录和数据契约以 [系统设计](design.md) 为准。`pku` 负责内存会话、页面获取和结构解析，`schedule` 处理时间和校历，`calendar` 序列化 ICS，`application` 编排，`entrypoints` 处理文件和平台行为。认证与获取仅在 Node 显式导入时运行；本项目不持久化上游会话，Worker 仅提供随代码部署的 ICS 快照，不使用 KV。
 
-已核查的上游版本、许可证、真实页面差异及联调限制见 [验证记录](verification.md)，运行与部署见 [README 使用说明](../README.md)。参考代码中的持久化会话、宽松错误处理和重复规则不是本项目的行为。
+历史核查的上游版本、许可证与真实页面差异见 [验证变更日志](changelog.md)，当前边界见 [验证记录](verification.md)，运行与部署见 [README 使用说明](../README.md)。参考代码中的持久化会话、宽松错误处理和重复规则不是本项目的行为。

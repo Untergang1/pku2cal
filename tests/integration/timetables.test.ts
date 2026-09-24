@@ -1,19 +1,19 @@
 import { spawnSync } from 'node:child_process';
-import { generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, expect, it, vi } from 'vitest';
 import { TimetableConfigError, validateConfig, validateSourceConfig } from '../../src/application/config.js';
-import { generateCalendar, generateFromHtml } from '../../src/application/generate.js';
+import { generateFromHtml } from '../fixtures/pipeline.js';
+import { importFromHtml } from '../../src/application/import.js';
+import { generateCalendar } from '../../src/application/generate.js';
 import { resolveCalendarConfig } from '../../src/entrypoints/calendar-config.js';
 import { generateFile } from '../../src/entrypoints/node.js';
 import { preparePages } from '../../src/entrypoints/pages-prepare.js';
-import { cacheIdentity, createWorker, type CalendarStore } from '../../src/entrypoints/worker.js';
-import { expandCourses } from '../../src/schedule/expand.js';
+import { createWorker } from '../../src/entrypoints/worker.js';
+import { expandCourses } from '../fixtures/pipeline.js';
 import { config as synthetic, course, timetable } from '../fixtures/timetable.js';
-import { upstream } from '../fixtures/upstream.js';
 
 // Public pre-migration config: a regression baseline, not a supported input format.
 const before = JSON.parse(await readFile(new URL('../fixtures/calendar-main.json', import.meta.url), 'utf8'));
@@ -39,11 +39,10 @@ async function directory() {
 }
 const readSynthetic = async (file: URL) => JSON.stringify(file.pathname.endsWith('/pku-main.json') ? tables['pku-main'] : tables['pku-ss']);
 
-it('preserves canonical config, bytes, UIDs and the existing Worker fingerprint on migration', async () => {
+it('preserves canonical config, bytes, UIDs on migration', async () => {
   const { config } = await resolveCalendarConfig(source);
   expect(JSON.stringify(config)).toBe(JSON.stringify(before));
   expect(generateFromHtml(timetable(), config, now)).toEqual(generateFromHtml(timetable(), validateConfig(before), now));
-  expect(cacheIdentity(config, 'synthetic').fingerprint).toBe('b0588254905f2eef969504071f6bf7362f51f2b73a019168eff9bad9beca9792');
 });
 
 it('reads only the selected table and ignores changes to unselected tables and labels', async () => {
@@ -55,10 +54,10 @@ it('reads only the selected table and ignores changes to unselected tables and l
     if (!file.pathname.endsWith('/pku-main.json')) throw new Error('unselected draft is invalid');
     return JSON.stringify({ ...tables['pku-main'], label: 'renamed' });
   });
-  expect(cacheIdentity(first.config, 'synthetic')).toEqual(cacheIdentity(other.config, 'synthetic'));
+  expect(first.config).toEqual(other.config);
 });
 
-it('switches times without changing UIDs and isolates caches after selection or table edits', async () => {
+it('switches times without changing UIDs', async () => {
   const a = (await resolveCalendarConfig(customSource, readSynthetic)).config;
   const b = (await resolveCalendarConfig({ ...customSource, timetable: 'pku-ss' }, readSynthetic)).config;
   const eventsA = expandCourses([course], a);
@@ -67,9 +66,8 @@ it('switches times without changing UIDs and isolates caches after selection or 
   expect(eventsA[0]!.start).toBe('2026-09-07T00:00:00.000Z');
   expect(eventsB[0]!.start).toBe('2026-09-07T00:05:00.000Z');
   expect(eventsB[0]!.end).toBe('2026-09-07T01:55:00.000Z');
-  expect(cacheIdentity(a, 'synthetic')).not.toEqual(cacheIdentity(b, 'synthetic'));
   const edited = (await resolveCalendarConfig(customSource, async () => JSON.stringify(tables['pku-ss']))).config;
-  expect(cacheIdentity(edited, 'synthetic')).toEqual(cacheIdentity(b, 'synthetic'));
+  expect(edited).toEqual(b);
 });
 
 it.each([
@@ -101,28 +99,24 @@ it('rejects absent files, malformed JSON and an empty SS draft without leaking c
 
 it('rejects a course referring to a missing period after table resolution', async () => {
   const { config } = await resolveCalendarConfig(customSource, async () => JSON.stringify({ label: 'partial', periods: periods.slice(0, 1) }));
-  expect(() => generateFromHtml(timetable(), config, now)).toThrow('schedule:periods');
+  expect(() => generateFromHtml(timetable(), config, now)).toThrow('缺少节次');
 });
 
 it.each(['pku-main', 'pku-ss'])('uses the selected %s table consistently in Node, Pages and Worker', async id => {
   const { config } = await resolveCalendarConfig({ ...customSource, timetable: id }, readSynthetic);
   const dir = await directory();
   const output = join(dir, 'node.ics');
-  const pem = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'pem' }).toString();
   const html = timetable([{ course: { ...course, segments: id === 'pku-ss' ? [...course.segments, '1周 周三5~7节', '1周 周四5~8节', '1周 周五8节'] : course.segments } }]);
-  const dependencies = { fetch: upstream(pem, html), now: () => now };
-  const credentials = { username: 'synthetic', password: 'synthetic-password' };
-  await generateFile({ config, output, credentials, dependencies });
+  const document = importFromHtml(html, config, now);
+  await generateFile({ config, document, output, now });
   const bytes = await readFile(output, 'utf8');
-  const data = new Map<string, string>();
-  const store: CalendarStore = { get: async key => data.get(key) ?? null, put: async (key, value) => { data.set(key, value); } };
+  const snapshot = generateCalendar(document, config, now);
   const token = Buffer.alloc(32, 1).toString('base64url');
-  const worker = createWorker(config, { ...dependencies, log: () => {} });
-  const response = await worker.fetch(new Request(`https://calendar.test/calendar/${token}.ics`), { CALENDAR_TOKEN: token, PKU_USERNAME: credentials.username, PKU_PASSWORD: credentials.password, CALENDAR_KV: store });
+  const response = await createWorker(snapshot).fetch(new Request(`https://calendar.test/calendar/${token}.ics`), { CALENDAR_TOKEN: token });
   expect(response.status).toBe(200);
   expect(await response.text()).toBe(bytes);
   await preparePages({ token, baseUrl: 'https://calendar.test/project/', force: false, directory: join(dir, 'site'),
-    generate: () => generateCalendar(config, credentials, dependencies), fetch: async () => new Response(null, { status: 404 }), assertAllowed: () => {},
+    snapshot, fetch: async () => new Response(null, { status: 404 }),
   });
   expect(await readFile(join(dir, 'site', token, 'calendar.ics'), 'utf8')).toBe(bytes);
 });
@@ -149,10 +143,8 @@ it('maps period 8 to lunchtime, preserves its UID and keeps canonical number ord
   expect(events[0]).toMatchObject({ start: '2026-09-07T05:00:00.000Z', end: '2026-09-07T05:50:00.000Z' });
   const original = { ...config, periods: config.periods.map(p => p.period === 8 ? { ...p, start: '17:00', end: '17:50' } : p) };
   expect(events[0]!.uid).toBe(expandCourses([mapped], original)[0]!.uid);
-  expect(cacheIdentity(config, 'synthetic')).not.toEqual(cacheIdentity(original, 'synthetic'));
   const reordered = validateConfig({ ...config, periods: [...config.periods].reverse() });
   expect(reordered.periods.map(p => p.period)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
-  expect(cacheIdentity(reordered, 'synthetic')).toEqual(cacheIdentity(config, 'synthetic'));
   const ics = generateFromHtml(timetable([{ course: mapped }]), config, now).ics;
   expect(ics).toContain('DTSTART:20260907T050000Z');
   expect(ics).toContain('DTEND:20260907T055000Z');

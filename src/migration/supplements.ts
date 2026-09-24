@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { RawCourse } from '../pku/parser.js';
-import { parseTime, type Slot } from './time.js';
+import { parseTime, type Slot } from '../schedule/time.js';
 import { isConfirmedUnscheduled, type UnscheduledCourseConfirmation } from './unscheduled.js';
 
 export class SupplementError extends Error {

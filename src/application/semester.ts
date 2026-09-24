@@ -8,7 +8,7 @@ export class SemesterWindowError extends Error {
   }
 }
 
-/** Date bounds are inclusive Shanghai calendar dates, independent of host TZ. */
+/** Import-only date bounds: inclusive Shanghai dates, independent of host TZ. */
 export function assertGenerationAllowed(config: SemesterConfig, now: Date): void {
   const timestamp = now.getTime();
   if (!Number.isFinite(timestamp)) throw new SemesterWindowError('invalid_clock');

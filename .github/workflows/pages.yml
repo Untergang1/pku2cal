@@ -1,10 +1,11 @@
-name: Generate calendar and publish Pages
+name: Publish calendar snapshot to Pages
 on:
-  schedule:
-    # 06:17 Asia/Shanghai, daily.
-    - cron: '17 22 * * *'
   workflow_dispatch:
     inputs:
+      snapshot_id:
+        description: Snapshot digest supplied by npm run pages:publish
+        type: string
+        required: true
       force_publish:
         description: Publish even if the calendar is unchanged
         type: boolean
@@ -37,12 +38,9 @@ jobs:
         id: prepare
         env:
           PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
-          PAGES_CALENDAR_TOKEN: ${{ secrets.PAGES_CALENDAR_TOKEN }}
+          PAGES_CALENDAR_SNAPSHOT: ${{ secrets.PAGES_CALENDAR_SNAPSHOT }}
+          PAGES_SNAPSHOT_ID: ${{ inputs.snapshot_id }}
           PAGES_FORCE_PUBLISH: ${{ inputs.force_publish && 'true' || 'false' }}
-          PKU_USERNAME: ${{ secrets.PKU_USERNAME }}
-          PKU_PASSWORD: ${{ secrets.PKU_PASSWORD }}
-          PKU_UNSCHEDULED_COURSES: ${{ secrets.PKU_UNSCHEDULED_COURSES }}
-          PKU_COURSE_SUPPLEMENTS: ${{ secrets.PKU_COURSE_SUPPLEMENTS }}
       - name: Calendar unchanged
         if: ${{ steps.prepare.outputs.changed == 'false' }}
         run: node -e "console.log('Calendar unchanged; keeping the current deployment.')"

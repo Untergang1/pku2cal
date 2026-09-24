@@ -1,92 +1,36 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { generateCalendar, type GenerationDependencies, type GeneratedCalendar } from '../application/generate.js';
-import { errorCategory, logRecord } from '../application/log.js';
-import type { Credentials } from '../pku/auth.js';
-import { ConfigError, TimetableConfigError, configWithPrivateSupplements, configWithPrivateConfirmations, validateConfig } from '../application/config.js';
-import { assertGenerationAllowed } from '../application/semester.js';
-import { resolveCalendarConfig } from './calendar-config.js';
-import { readPrivateSupplements } from './private-supplements.js';
+import { generateCalendar, type GeneratedCalendar } from '../application/generate.js';
 import { semesterStatus } from '../application/setup.js';
+import { savePagesState } from './pages-state.js';
+import { readCalendar, readLocalSnapshot, reportLocalError } from './local-data.js';
 
-export async function readPrivateConfirmations(inline: string | undefined, file: string | undefined): Promise<string | undefined> {
-  if (!file?.trim()) return inline;
-  if (inline?.trim()) throw new ConfigError();
-  return readFile(resolve(file), 'utf8');
-}
-
-/** File replacement is the final operation, after complete successful generation. */
-export async function generateFile(options: {
-  config: unknown; output: string; credentials: Credentials; dependencies: GenerationDependencies;
-}): Promise<GeneratedCalendar> {
-  const result = await generateCalendar(options.config, options.credentials, options.dependencies);
-  const output = resolve(options.output);
-  await mkdir(dirname(output), { recursive: true });
-  const temporary = `${output}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, result.ics, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    assertGenerationAllowed(validateConfig(options.config), options.dependencies.now());
-    await rename(temporary, output);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+export async function generateFile(options: { config: unknown; document: unknown; output: string; now: Date }): Promise<GeneratedCalendar> {
+  const result = generateCalendar(options.document, options.config, options.now);
+  await savePagesState(resolve(options.output), result.ics);
   return result;
 }
-
 export async function main(): Promise<void> {
-  const started = Date.now();
   try {
     const { values } = parseArgs({ options: {
-      config: { type: 'string', default: 'config/calendar.json' }, output: { type: 'string', default: 'data/calendar.ics' },
-      confirmations: { type: 'string' }, supplements: { type: 'string' }, status: { type: 'boolean' }, help: { type: 'boolean' },
+      config: { type: 'string', default: 'config/calendar.json' }, schedule: { type: 'string', default: 'data/schedule.yaml' },
+      output: { type: 'string', default: 'data/calendar.ics' }, check: { type: 'boolean' }, status: { type: 'boolean' }, help: { type: 'boolean' },
     }, strict: true });
     if (values.help) {
-      console.log('用法：npm run generate [-- --config config/calendar.json --output data/calendar.ics --confirmations data/confirmed-courses.json --supplements data/course-supplements.json]\n先运行 npm run setup 选择校历；npm run status 可检查时间表、学期和日期状态，不会登录或生成。');
+      console.log('用法：npm run generate [-- --config config/calendar.json --schedule data/schedule.yaml --output data/calendar.ics]\nnpm run schedule:check 仅验证本地课表；npm run status 显示校历与拉取日期状态。所有操作均不登录北大。');
       return;
     }
-    let input: unknown;
-    try { input = JSON.parse(await readFile(resolve(values.config), 'utf8')); }
-    catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        console.error('尚未找到校历配置。请先运行 npm run setup，或用 --config 指定已有配置。');
-        process.exitCode = 1;
-        return;
-      }
-      throw error;
-    }
-    const selected = await resolveCalendarConfig(input);
     if (values.status) {
+      const selected = await readCalendar(values.config);
       console.log(`时间表：${selected.label}（${selected.source.timetable}）`);
       for (const line of semesterStatus(selected.config, new Date())) console.log(line);
-      console.log('这里只检查时间表、学期和日期；课程与凭据将在生成时验证。');
+      console.log('本地课表的生成和发布不受当前日期限制。');
       return;
     }
-    const confirmations = await readPrivateConfirmations(process.env.PKU_UNSCHEDULED_COURSES, values.confirmations ?? process.env.PKU_UNSCHEDULED_COURSES_FILE);
-    const supplements = await readPrivateSupplements(process.env.PKU_COURSE_SUPPLEMENTS, values.supplements ?? process.env.PKU_COURSE_SUPPLEMENTS_FILE);
-    const config = configWithPrivateSupplements(configWithPrivateConfirmations(selected.config, confirmations), supplements);
-    await generateFile({ config, output: values.output, credentials: {
-      username: process.env.PKU_USERNAME ?? '', password: process.env.PKU_PASSWORD ?? '',
-    }, dependencies: { fetch, now: () => new Date() } });
-    logRecord({ stage: 'generate', category: 'success', durationMs: Date.now() - started });
-  } catch (error) {
-    logRecord({ stage: 'generate', category: errorCategory(error), durationMs: Date.now() - started });
-    const guidance: Record<string, string> = {
-      'semester:expired': '该学期已超过生成有效期，旧文件已保留。请更新并选择新学期校历。',
-      'semester:not_started': '尚未到达校历中的开始日期，暂不生成；可用 npm run status 查看。',
-      'parse:semester': '上游学期缺失或与配置不符。请核实当前选课学期，并运行 npm run setup 选择对应校历。',
-      'supplements:invalid': '课程补充配置无效：请检查私密来源、学期、字段、教学周和节次。',
-      'supplements:conflict': '手动课程与系统课程、教室覆盖或无固定时间确认重复，请复核并移除冲突项。',
-      'supplements:duplicate': '手动课程包含重复的教学周和时段，请检查补充配置。',
-      'schedule:periods': '课程涉及缺失节次或无效节次范围。请核对课表节次与所选时间表。',
-      'schedule:time': '存在无法识别时间的课程，未生成日历。请核实时间说明；确无固定时间的课程需单独确认。',
-    };
-    const message = error instanceof TimetableConfigError ? error.guidance : guidance[errorCategory(error)];
-    if (message) console.error(message);
-    process.exitCode = 1;
-  }
+    const snapshot = await readLocalSnapshot(values);
+    if (!values.check) await savePagesState(resolve(values.output), snapshot.ics);
+    console.log(values.check ? '本地课表检查通过。' : '本地日历生成成功。');
+  } catch (error) { reportLocalError(error); process.exitCode = 1; }
 }
-
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();

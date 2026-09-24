@@ -18,7 +18,7 @@ export async function loadPresets(directory = new URL('../../config/', import.me
   if (!catalogue.success) throw new SetupError('catalogue');
   return Promise.all(catalogue.data.map(async entry => {
     const calendar = validateSourceConfig(JSON.parse(await readFile(new URL(entry.calendarFile, directory), 'utf8')));
-    if (calendar.semester !== entry.semester || calendar.unscheduledCourses?.length) throw new SetupError('catalogue');
+    if (calendar.semester !== entry.semester) throw new SetupError('catalogue');
     return { label: entry.label, source: entry.source, calendar, validThrough: entry.validThrough };
   }));
 }
@@ -44,7 +44,7 @@ export async function main(): Promise<void> {
   try {
     const { values } = parseArgs({ options: { semester: { type: 'string' }, output: { type: 'string', default: 'config/calendar.json' }, help: { type: 'boolean' } }, strict: true });
     if (values.help) {
-      console.log('用法：npm run setup [-- --semester 2026-2027-1] [--output config/calendar.json]\n默认按北京时间选择已核实的校本部校历，自动填入生成起止日期。');
+      console.log('用法：npm run setup [-- --semester 2026-2027-1] [--output config/calendar.json]\n默认按北京时间选择已核实的校本部校历，自动填入拉取起止日期。');
       return;
     }
     const now = new Date();
@@ -56,7 +56,7 @@ export async function main(): Promise<void> {
     console.log(`时间表：${resolved.label}（${selected.config.timetable}）`);
     console.log('配置文件：' + values.output);
     console.log('校历来源：' + selected.source);
-    console.log('下一步：在 .env 中填写凭据，然后运行 npm run generate。');
+    console.log('下一步：在 .env 中填写凭据，然后运行 npm run schedule:pull。');
   } catch (error) {
     const messages: Record<string, string> = {
       no_current: '当前北京时间未落在任何已核实校历内。请更新校历，或用 --semester 明确选择已收录的学期。',

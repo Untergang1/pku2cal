@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { configWithPrivateConfirmations, validateConfig, type CalendarConfig } from '../../src/application/config.js';
-import { generateCalendar, generateFromHtml } from '../../src/application/generate.js';
+import { configWithPrivateConfirmations, validateConfig, type CalendarConfig } from '../../src/migration/config.js';
+import { generateFromHtml } from '../fixtures/legacy.js';
+import { importSchedule as generateCalendar } from '../../src/application/import.js';
 import { assertGenerationAllowed } from '../../src/application/semester.js';
-import { expandCourses } from '../../src/schedule/expand.js';
+import { expandCourses } from '../fixtures/legacy.js';
 import { config, course, timetable } from '../fixtures/timetable.js';
 import { upstream } from '../fixtures/upstream.js';
 import { generateKeyPairSync } from 'node:crypto';
