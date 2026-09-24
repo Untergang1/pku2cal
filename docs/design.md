@@ -48,7 +48,7 @@ tests/
   integration/   # 完整生成流程、入口一致性及故障行为测试
   fixtures/      # 合成或脱敏的页面、课程数据与预期结果
 config/          # 可提交的校历、节次配置与配置示例
-docs/            # 系统设计、参考资料及使用说明
+docs/            # 系统设计、参考资料及验证记录
 .github/
   workflows/     # 跨平台 CI、定时生成与 Pages 发布
 ```
