@@ -27,7 +27,7 @@ npm run schedule:check
 npm run generate
 ```
 
-生成结果为 `data/calendar.ics`。可以直接导入日历应用；直接导入的文件不会自动更新。已有旧版本人工确认、补丁或部署的用户请先看[迁移指南](docs/migration.md)，使用 `schedule:migrate` 创建第一份 YAML。
+生成结果为 `data/calendar.ics`。可以直接导入日历应用；直接导入的文件不会自动更新。
 
 ## 编辑课表
 
@@ -86,7 +86,7 @@ slots:
 npm run schedule:pull -- --overwrite
 ```
 
-此命令完整替换课表，**会覆盖手工修改，不合并旧文件或旧补丁**。不带 `--overwrite` 时，已有文件会在登录前拒绝覆盖。
+此命令完整替换课表，**会覆盖手工修改，不合并旧文件**。不带 `--overwrite` 时，已有文件会在登录前拒绝覆盖。
 
 获取、解析成功后，旧文件原样备份到 `data/backups/`，然后原子替换。备份、登录、页面完整性、学期检查失败或发现拉取期间文件被编辑时，不替换当前课表。备份不自动删除；文件权限为 `0600`。不要在拉取运行期间编辑文件。
 
@@ -180,6 +180,8 @@ npm run worker:check
 
 CI 在 macOS、Linux 上使用相同安装、构建、测试与 Worker dry-run 命令；所有测试和 dry-run 使用合成数据，不依赖真实凭据。按变更运行相关测试即可，无需为小改动运行完整套件。
 
-如果进程被强制终止，先确认没有运行中的命令，再清理对应 `.lock` 目录或 Worker `.run-*` 私密临时目录；正常完成或报错会自动清理。备份、旧 KV 与历史部署不会自动删除。
+如果进程被强制终止，先确认没有运行中的命令，再清理对应 `.lock` 目录或 Worker `.run-*` 私密临时目录；正常完成或报错会自动清理。课表备份不会自动删除。
 
-实现和验收边界见[系统设计](docs/design.md)、[迁移指南](docs/migration.md)及[验证记录](docs/verification.md)。
+`npm run build` 会先清理 `dist` 子目录中已无对应源码的编译产物，保留有效输出和根目录 Worker bundle。缓存 `.cache/` 与依赖中的测试缓存可在没有运行中任务时删除；保留正在使用的 ICS、部署配置和私密状态。
+
+实现和验收边界见[系统设计](docs/design.md)及[验证边界](docs/verification.md)，上游资料与时间表依据见[参考资料](docs/reference.md)。

@@ -1,6 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 
 export const cloudflareId = z.string().regex(/^[a-f0-9]{32}$/).refine(value => value !== '0'.repeat(32));
@@ -10,18 +8,4 @@ export const workerToken = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 export const workerState = z.object({
   accountId: cloudflareId, name: workerName, token: workerToken,
 }).strict();
-// Only the migration path reads the old namespace; normal state has no KV binding.
-export const legacyWorkerState = workerState.extend({ namespaceId: cloudflareId }).strict();
 export const newWorkerToken = () => randomBytes(32).toString('base64url');
-
-/** Persist the token before any remote mutation, including a rotation. */
-export async function saveWorkerFile(path: string, content: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-}

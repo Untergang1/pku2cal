@@ -9,7 +9,8 @@ import { DocumentError } from '../schedule/document.js';
 import { TimetableConfigError } from '../application/config.js';
 import { readLocalSnapshot, reportLocalError } from './local-data.js';
 import { SnapshotError, validateSnapshot } from '../application/snapshot.js';
-import { cloudflareId, newWorkerToken, saveWorkerFile, workerName, workerState, legacyWorkerState } from './worker-state.js';
+import { cloudflareId, newWorkerToken, workerName, workerState } from './worker-state.js';
+import { savePrivateFile } from './private-files.js';
 import { cloudflareReader, verifyWorker, workerCommand, WorkerSetupError, type WorkerCommand } from './worker-cloudflare.js';
 
 const baseSchema = z.object({
@@ -84,20 +85,8 @@ export async function setupWorker(options: WorkerSetupOptions, d: WorkerSetupDep
     const api = cloudflareReader(credentials.token, account, d.fetch);
     const statePath = `data/worker/${account}/${name}.json`;
     let state: z.infer<typeof workerState> | undefined;
-    let legacyNamespace: string | undefined;
-    let legacyStateText: string | undefined;
     try {
-      const text = await d.read(statePath);
-      const input: unknown = JSON.parse(text);
-      const current = workerState.safeParse(input);
-      if (current.success) state = current.data;
-      else {
-        const legacy = legacyWorkerState.parse(input);
-        legacyNamespace = legacy.namespaceId;
-        legacyStateText = text;
-        const { namespaceId: _namespace, ...clean } = legacy;
-        state = clean;
-      }
+      state = workerState.parse(JSON.parse(await d.read(statePath)));
       if (state.accountId !== account || state.name !== name) throw new Error();
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
@@ -108,28 +97,17 @@ export async function setupWorker(options: WorkerSetupOptions, d: WorkerSetupDep
     try { subdomain = z.object({ subdomain: workerName }).parse(await api('/workers/subdomain')).subdomain; }
     catch { throw new WorkerSetupError('无法读取 workers.dev 子域名；请检查账号权限，并在 Cloudflare Workers & Pages 中完成子域名设置。'); }
     const remote = await api(`/workers/scripts/${name}/settings`, true);
-    let remoteSecretNames: string[] = [];
     if (remote !== null) {
-      const bindings = z.object({ bindings: z.array(z.object({ name: z.string(), type: z.string(), namespace_id: z.string().optional(), text: z.string().optional() })) }).parse(remote).bindings;
-      remoteSecretNames = bindings.filter(item => item.type === 'secret_text').map(item => item.name);
-      const remoteNamespace = bindings.find(item => item.name === 'CALENDAR_KV' && item.type === 'kv_namespace')?.namespace_id;
+      const bindings = z.object({ bindings: z.array(z.object({ name: z.string(), type: z.string(), text: z.string().optional() })) }).parse(remote).bindings;
+      const hasToken = bindings.some(item => item.name === 'CALENDAR_TOKEN' && item.type === 'secret_text');
       const current = bindings.some(item => item.name === 'PKU2CAL_MODE' && item.type === 'plain_text' && item.text === 'snapshot-v1');
-      const legacy = !!remoteNamespace && ['PKU_USERNAME', 'PKU_PASSWORD'].every(key => remoteSecretNames.includes(key));
-      if (!remoteSecretNames.includes('CALENDAR_TOKEN') || !(current || legacy)) throw new WorkerSetupError('同名 Worker 不是可识别的 pku2cal 部署；不会覆盖。');
-      if (legacyNamespace && remoteNamespace && remoteNamespace !== legacyNamespace) throw new WorkerSetupError('本地旧 KV 与云端绑定冲突，请核对后重试。');
+      if (!hasToken || !current) throw new WorkerSetupError('同名 Worker 不是可识别的 pku2cal 部署；不会覆盖。');
       if (!state && !options.rotateToken) throw new WorkerSetupError('云端已有 Worker 令牌，但本地状态文件缺失；请恢复状态，或显式 --rotate-token。');
     }
     const cliEnv = { ...buildEnv, CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: credentials.token };
     state = workerState.parse({ accountId: account, name, token: !state || options.rotateToken ? d.randomToken() : state.token });
-    if (legacyStateText) {
-      try { await d.read(`${statePath}.pre-snapshot.bak`); }
-      catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-        await d.save(`${statePath}.pre-snapshot.bak`, legacyStateText);
-      }
-    }
-    // Keep the old namespace in state until the replacement deployment is verified.
-    await d.save(statePath, JSON.stringify(legacyNamespace ? { ...state, namespaceId: legacyNamespace } : state) + '\n');
+    // Persist the token before deployment so a failed rotation can be retried.
+    await d.save(statePath, JSON.stringify(state) + '\n');
     const finalConfig = deploymentConfig(base, name, account);
     await d.save(temporaryConfig, JSON.stringify(finalConfig));
     await d.save(`data/worker/${account}/${name}.wrangler.json`, JSON.stringify(finalConfig, null, 2) + '\n');
@@ -146,14 +124,6 @@ export async function setupWorker(options: WorkerSetupOptions, d: WorkerSetupDep
     z.object({ enabled: z.literal(true) }).parse(await api(`/workers/scripts/${name}/subdomain`));
     const url = `https://${name}.${subdomain}.workers.dev/calendar/${state.token}.ics`;
     await verifyWorker(url, d.fetch, d.sleep, snapshot.ics);
-    await d.save(statePath, JSON.stringify(state) + '\n');
-    progress('清理旧 Secrets');
-    for (const key of ['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES', 'PKU_COURSE_SUPPLEMENTS']) {
-      if (remoteSecretNames.includes(key)) {
-        try { await d.command(['secret', 'delete', key, '--config', temporaryConfig], cliEnv); }
-        catch { throw new WorkerSetupError('发布成功、旧 Secrets 清理未完成；请重跑 worker:deploy 完成清理。'); }
-      }
-    }
     d.log('部署与云端日历验证通过；完整订阅地址仅在本机显示，请保密。');
     return url;
   } catch (error) {
@@ -194,7 +164,7 @@ export async function main(): Promise<void> {
     await withWorkerSetupDirectory(async directory => {
       const url = await setupWorker({ deploy: true, rotateToken: values['rotate-token'] === true,
         ...(values.account ? { account: values.account } : {}), ...(values.name ? { name: values.name } : {}), config: values.config, schedule: values.schedule }, {
-        env: process.env, directory, read: path => readFile(resolve(path), 'utf8'), save: saveWorkerFile,
+        env: process.env, directory, read: path => readFile(resolve(path), 'utf8'), save: savePrivateFile,
         remove: path => rm(path, { force: true }), command: workerCommand(directory), fetch, now: () => new Date(),
         randomToken: newWorkerToken, sleep, log: console.log,
       });

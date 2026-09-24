@@ -2,7 +2,7 @@ import { readFile, mkdir, rm, link } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveCalendarConfig } from './calendar-config.js';
-import { savePagesState } from './pages-state.js';
+import { savePrivateFile } from './private-files.js';
 import { fileURLToPath } from 'node:url';
 import { DocumentError, readScheduleYaml } from '../schedule/document.js';
 import { generateCalendar } from '../application/generate.js';
@@ -48,6 +48,6 @@ export async function optionalRead(path: string): Promise<Buffer | null> {
 /** link is an atomic, no-clobber initial install on both macOS and Linux. */
 export async function createPrivateFile(path: string, content: string): Promise<void> {
   const temporary = `${path}.${randomUUID()}.tmp`;
-  try { await savePagesState(temporary, content); await link(temporary, path); }
+  try { await savePrivateFile(temporary, content); await link(temporary, path); }
   finally { await rm(temporary, { force: true }); }
 }

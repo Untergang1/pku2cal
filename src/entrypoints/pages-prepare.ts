@@ -4,7 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { calendarIdentity } from '../calendar/compare.js';
 import type { GeneratedCalendar } from '../application/generate.js';
 import { decodeSnapshot } from '../application/snapshot.js';
-import { savePagesState, subscriptionUrl, validatePagesToken } from './pages-state.js';
+import { subscriptionUrl, validatePagesToken } from './pages-state.js';
+import { savePrivateFile } from './private-files.js';
 
 export interface PagesDecision { changed: boolean; reason: 'missing' | 'changed' | 'unchanged' | 'forced' }
 
@@ -34,7 +35,7 @@ export async function preparePages(options: {
   // This is a dedicated, ignored staging directory, never an existing deployment.
   await rm(options.directory, { recursive: true, force: true });
   await mkdir(options.directory, { recursive: true });
-  await savePagesState(resolve(options.directory, options.token, 'calendar.ics'), candidate.ics);
+  await savePrivateFile(resolve(options.directory, options.token, 'calendar.ics'), candidate.ics);
   return { changed: true, reason };
 }
 

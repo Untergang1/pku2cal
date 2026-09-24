@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
-import { saveWorkerFile } from '../dist/entrypoints/worker-state.js';
+import { savePrivateFile } from '../dist/entrypoints/private-files.js';
 import { readLocalSnapshot } from '../dist/entrypoints/local-data.js';
 import { validateSnapshot } from '../dist/application/snapshot.js';
 
@@ -14,7 +14,7 @@ try {
     conditions: ['workerd', 'browser'], external: ['node:*'],
     define: { __CALENDAR_SNAPSHOT__: JSON.stringify(snapshot) },
   });
-  await saveWorkerFile('dist/worker.mjs', bundle.outputFiles[0].text);
+  await savePrivateFile('dist/worker.mjs', bundle.outputFiles[0].text);
 } catch {
   console.error('worker-build:invalid (run schedule:check; a valid local schedule and calendar are required)');
   process.exitCode = 1;

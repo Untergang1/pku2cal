@@ -15,9 +15,6 @@ import { createWorker } from '../../src/entrypoints/worker.js';
 import { expandCourses } from '../fixtures/pipeline.js';
 import { config as synthetic, course, timetable } from '../fixtures/timetable.js';
 
-// Public pre-migration config: a regression baseline, not a supported input format.
-const before = JSON.parse(await readFile(new URL('../fixtures/calendar-main.json', import.meta.url), 'utf8'));
-const source = { ...JSON.parse(await readFile(new URL('../../config/pku-main-2026-2027-1.json', import.meta.url), 'utf8')), semesterBinding: before.semesterBinding };
 const now = new Date('2026-09-24T02:00:00Z');
 const { periods, ...fields } = synthetic;
 const customSource = { ...fields, timetable: 'pku-main' };
@@ -38,12 +35,6 @@ async function directory() {
   const path = await mkdtemp(join(tmpdir(), 'pku-timetable-')); directories.push(path); return path;
 }
 const readSynthetic = async (file: URL) => JSON.stringify(file.pathname.endsWith('/pku-main.json') ? tables['pku-main'] : tables['pku-ss']);
-
-it('preserves canonical config, bytes, UIDs on migration', async () => {
-  const { config } = await resolveCalendarConfig(source);
-  expect(JSON.stringify(config)).toBe(JSON.stringify(before));
-  expect(generateFromHtml(timetable(), config, now)).toEqual(generateFromHtml(timetable(), validateConfig(before), now));
-});
 
 it('reads only the selected table and ignores changes to unselected tables and labels', async () => {
   const read = vi.fn(readSynthetic);
@@ -71,8 +62,8 @@ it('switches times without changing UIDs', async () => {
 });
 
 it.each([
-  before, { ...source, periods: [] }, { ...source, timetable: undefined },
-  { ...source, timetable: 'unknown' }, { ...source, timetable: '../../private' },
+  synthetic, { ...customSource, periods: [] }, { ...customSource, timetable: undefined },
+  { ...customSource, timetable: 'unknown' }, { ...customSource, timetable: '../../private' },
 ])('rejects obsolete, mixed or unknown selection input %# before reading files', async input => {
   const read = vi.fn(readSynthetic);
   await expect(resolveCalendarConfig(input, read)).rejects.toBeInstanceOf(TimetableConfigError);
@@ -93,8 +84,8 @@ it('rejects absent files, malformed JSON and an empty SS draft without leaking c
   for (const read of [async () => { throw new Error('private-path'); }, async () => 'private invalid contents']) {
     await expect(resolveCalendarConfig(customSource, read)).rejects.toMatchObject({ guidance: expect.not.stringContaining('private') });
   }
-  await expect(resolveCalendarConfig({ ...source, timetable: 'pku-ss' }, async () => JSON.stringify({ label: '合成软微草稿', periods: [] }))).rejects.toMatchObject({ guidance: expect.stringContaining('config/timetables/pku-ss.json') });
-  await expect(resolveCalendarConfig(source)).resolves.toHaveProperty('config.periods');
+  await expect(resolveCalendarConfig({ ...customSource, timetable: 'pku-ss' }, async () => JSON.stringify({ label: '合成软微草稿', periods: [] }))).rejects.toMatchObject({ guidance: expect.stringContaining('config/timetables/pku-ss.json') });
+  await expect(resolveCalendarConfig(customSource)).resolves.toHaveProperty('config.periods');
 });
 
 it('rejects a course referring to a missing period after table resolution', async () => {
@@ -125,11 +116,11 @@ it('checks selection through the built status CLI with calendar and cwd outside 
   const dir = await directory();
   const path = join(dir, 'calendar.json');
   const cli = fileURLToPath(new URL('../../dist/entrypoints/node.js', import.meta.url));
-  await writeFile(path, JSON.stringify(validateSourceConfig(source)));
+  await writeFile(path, JSON.stringify(validateSourceConfig(customSource)));
   const status = spawnSync(process.execPath, [cli, '--status', '--config', path], { cwd: dir, encoding: 'utf8' });
   expect(status.status, status.stderr).toBe(0);
   expect(status.stdout).toContain('北京大学校本部（pku-main）');
-  await writeFile(path, JSON.stringify({ ...source, timetable: 'unknown' }));
+  await writeFile(path, JSON.stringify({ ...customSource, timetable: 'unknown' }));
   const draft = spawnSync(process.execPath, [cli, '--status', '--config', path], { cwd: dir, encoding: 'utf8' });
   expect(draft.status).toBe(1);
   expect(draft.stderr).toContain('timetable: "pku-main" 或 "pku-ss"');

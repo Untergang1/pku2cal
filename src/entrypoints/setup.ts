@@ -23,7 +23,7 @@ export async function loadPresets(directory = new URL('../../config/', import.me
   }));
 }
 
-/** Never replace an existing user's namespace, calendar, or private decisions. */
+/** Never replace an existing user's namespace or calendar. */
 export async function initializeCalendar(output: string, config: CalendarSourceConfig): Promise<'created' | 'unchanged'> {
   const valid = validateSourceConfig(config);
   const path = resolve(output);

@@ -44,25 +44,14 @@ export async function main(): Promise<void> {
   try {
     const { values } = parseArgs({ strict: true, options: {
       config: { type: 'string', default: 'config/calendar.json' }, output: { type: 'string', default: 'data/schedule.yaml' },
-      overwrite: { type: 'boolean' }, migrate: { type: 'boolean' }, help: { type: 'boolean' },
+      overwrite: { type: 'boolean' }, help: { type: 'boolean' },
     } });
-    if (values.help) { console.log('npm run schedule:pull [-- --overwrite --config config/calendar.json --output data/schedule.yaml]\nnpm run schedule:migrate 仅用于首次迁移，读取旧人工配置，拒绝覆盖已有 YAML。'); return; }
-    if (values.migrate && values.overwrite) throw new DocumentError('$', '迁移不支持覆盖已有 YAML');
+    if (values.help) { console.log('npm run schedule:pull [-- --overwrite --config config/calendar.json --output data/schedule.yaml]'); return; }
     const credentials = { username: process.env.PKU_USERNAME ?? '', password: process.env.PKU_PASSWORD ?? '' };
     const dependencies = { fetch, now: () => new Date() };
-    // Legacy config is reachable only through the explicit migration branch.
-    let load: () => Promise<ScheduleDocument>;
-    let assertAllowed: () => void;
-    if (values.migrate) {
-      const migration = await import('../migration/import.js');
-      const { config } = await migration.readMigrationConfig(values.config, process.env);
-      load = () => migration.migrateSchedule(config, credentials, dependencies);
-      assertAllowed = () => assertGenerationAllowed(config, dependencies.now());
-    } else {
-      const { config } = await readCalendar(values.config);
-      load = () => importSchedule(config, credentials, dependencies);
-      assertAllowed = () => assertGenerationAllowed(config, dependencies.now());
-    }
+    const { config } = await readCalendar(values.config);
+    const load = () => importSchedule(config, credentials, dependencies);
+    const assertAllowed = () => assertGenerationAllowed(config, dependencies.now());
     const result = await pullFile({ output: values.output, overwrite: values.overwrite === true, load, assertAllowed });
     const pending = result.courses.flatMap(c => c.slots).filter(s => s.status === 'pending').length;
     console.log(`课表已保存；待处理时段：${pending}。请编辑后运行 npm run schedule:check。`);

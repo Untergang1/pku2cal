@@ -4,10 +4,9 @@ import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
 import { setupWorker, withWorkerSetupDirectory, type WorkerSetupDependencies } from '../../src/entrypoints/worker-setup.js';
 import { cloudflareReader, verifyWorker, workerCommand, workerCommandEnv } from '../../src/entrypoints/worker-cloudflare.js';
-import { saveWorkerFile } from '../../src/entrypoints/worker-state.js';
+import { savePrivateFile } from '../../src/entrypoints/private-files.js';
 
 const account = 'a'.repeat(32);
-const namespace = 'b'.repeat(32);
 const token = Buffer.alloc(32, 1).toString('base64url');
 const rotated = Buffer.alloc(32, 2).toString('base64url');
 const statePath = `data/worker/${account}/pku2cal.json`;
@@ -15,12 +14,12 @@ const ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Synthetic//EN\r\nEND:VC
 const config = JSON.parse(await readFile(new URL('../../config/pku-main-2026-2027-1.json', import.meta.url), 'utf8'));
 config.semesterBinding = { confirmedSemester: '2026-2027-1', validFrom: '2026-09-07', validThrough: '2027-01-10' };
 const wrangler = JSON.parse(await readFile(new URL('../../wrangler.jsonc', import.meta.url), 'utf8'));
-const bindings: { name: string; type: string; namespace_id?: string; text?: string }[] = [
-  { name: 'CALENDAR_KV', type: 'kv_namespace', namespace_id: namespace },
-  ...['PKU_USERNAME', 'PKU_PASSWORD', 'CALENDAR_TOKEN'].map(name => ({ name, type: 'secret_text' })),
+const bindings: { name: string; type: string; text?: string }[] = [
+  { name: 'PKU2CAL_MODE', type: 'plain_text', text: 'snapshot-v1' },
+  { name: 'CALENDAR_TOKEN', type: 'secret_text' },
 ];
-const fresh = (body = ics, status = 'fresh') => new Response(body, { headers: {
-  'content-type': 'text/calendar; charset=utf-8', 'x-calendar-status': status,
+const calendarResponse = (body = ics) => new Response(body, { headers: {
+  'content-type': 'text/calendar; charset=utf-8',
   'cache-control': 'private, no-store', 'last-modified': 'Thu, 24 Sep 2026 00:00:00 GMT',
 } });
 
@@ -30,8 +29,8 @@ function fixture() {
   const calls: { args: string[]; env: NodeJS.ProcessEnv | undefined }[] = [];
   const requests: { url: string; options: RequestInit | undefined }[] = [];
   const cloud = {
-    exists: false, bindings, accounts: [{ id: account }], namespaces: [] as { id: string; title: string }[],
-    failCommand: '', status: 200, body: ics, cacheStatus: 'fresh', apiStatus: 200, failSave: '',
+    exists: false, bindings, accounts: [{ id: account }],
+    failCommand: '', status: 200, body: ics, apiStatus: 200, failSave: '',
     missingSubdomain: false, routeEnabled: true, failProbe: false, invalidStatus: 404,
   };
   let uploaded: Record<string, string> | undefined;
@@ -58,11 +57,6 @@ function fixture() {
       if (args.join(' ').includes(cloud.failCommand) && cloud.failCommand) throw new Error('synthetic-password private CLI failure');
       if (args[0] === 'whoami') return JSON.stringify({ loggedIn: true, accounts: cloud.accounts });
       if (args[0] === 'auth') return JSON.stringify({ type: 'oauth', token: 'synthetic-cloudflare-token' });
-      if (args[0] === 'kv' && args[2] === 'list') return JSON.stringify(cloud.namespaces);
-      if (args[0] === 'kv' && args[2] === 'create') {
-        expect(files.has(statePath)).toBe(true);
-        cloud.namespaces.push({ id: namespace, title: args[3]! });
-      }
       if (args[0] === 'deploy' && !args.includes('--dry-run')) {
         uploaded = JSON.parse(files.get(args[args.indexOf('--secrets-file') + 1]!)!);
         cloud.exists = true;
@@ -84,22 +78,21 @@ function fixture() {
       }
       if (cloud.failProbe) throw new Error(`private URL ${url}`);
       if (url.endsWith('/invalid.ics')) return new Response('', { status: cloud.invalidStatus });
-      return cloud.status === 200 ? fresh(cloud.body, cloud.cacheStatus) : new Response('private course error', { status: cloud.status });
+      return cloud.status === 200 ? calendarResponse(cloud.body) : new Response('private course error', { status: cloud.status });
     }) as typeof fetch,
   };
   const existing = () => {
     cloud.exists = true;
-    cloud.namespaces = [{ id: namespace, title: 'pku2cal-CALENDAR_KV' }];
-    files.set(statePath, JSON.stringify({ accountId: account, name: 'pku2cal', token, namespaceId: namespace }));
+    files.set(statePath, JSON.stringify({ accountId: account, name: 'pku2cal', token }));
   };
-  const writes = () => calls.filter(item => item.args[2] === 'create' || item.args[0] === 'deploy' && !item.args.includes('--dry-run'));
+  const writes = () => calls.filter(item => item.args[0] === 'deploy' && !item.args.includes('--dry-run'));
   return { d, files, cloud, calls, requests, logs, existing, writes, uploaded: () => uploaded };
 }
 
 it('retries propagation failures without logging private URLs', async () => {
   let count = 0;
   const request = (async (url: string) => ++count === 1 ? new Response('', { status: 404 })
-    : url.endsWith('/invalid.ics') ? new Response('', { status: 404 }) : fresh()) as typeof fetch;
+    : url.endsWith('/invalid.ics') ? new Response('', { status: 404 }) : calendarResponse()) as typeof fetch;
   const waits: number[] = [];
   await verifyWorker(`https://test.workers.dev/calendar/${token}.ics`, request, async ms => { waits.push(ms); }, ics);
   expect(waits).toEqual([5000]);
@@ -126,7 +119,7 @@ it('preserves real Wrangler auth JSON output with a synthetic token and no Cloud
   const directory = await mkdtemp(resolve(tmpdir(), 'pku2cal-worker-auth-'));
   try {
     const configPath = resolve(directory, 'wrangler.json');
-    await saveWorkerFile(configPath, JSON.stringify({ name: 'synthetic-worker', compatibility_date: '2026-09-24' }));
+    await savePrivateFile(configPath, JSON.stringify({ name: 'synthetic-worker', compatibility_date: '2026-09-24' }));
     const command = workerCommand(directory, { CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token' });
     const output = await command(['auth', 'token', '--json', '--config', configPath]);
     expect(JSON.parse(output)).toEqual({ type: 'api_token', token: 'synthetic-cloudflare-token' });
@@ -143,8 +136,8 @@ it('blocks concurrent local setup and cleans secrets, logs and lock after failur
   try {
     await expect(withWorkerSetupDirectory(async directory => {
       expect((await stat(directory)).mode & 0o777).toBe(0o700);
-      await saveWorkerFile(resolve(directory, 'secrets.json'), 'synthetic-password');
-      await saveWorkerFile(resolve(directory, 'logs', 'wrangler.log'), 'synthetic-token');
+      await savePrivateFile(resolve(directory, 'secrets.json'), 'synthetic-password');
+      await savePrivateFile(resolve(directory, 'logs', 'wrangler.log'), 'synthetic-token');
       await expect(withWorkerSetupDirectory(async () => { throw new Error('must not run'); }, root)).rejects.toThrow('另一个初始化');
       throw new Error('deployment failed');
     }, root)).rejects.toThrow('deployment failed');
@@ -152,19 +145,6 @@ it('blocks concurrent local setup and cleans secrets, logs and lock after failur
     expect(await withWorkerSetupDirectory(async () => 'retry', root)).toBe('retry');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
-
-it('persists private state atomically with 0600 permissions and no temporary residue', async () => {
-  const directory = await mkdtemp(resolve(tmpdir(), 'pku2cal-worker-state-'));
-  try {
-    const path = resolve(directory, 'state.json');
-    await saveWorkerFile(path, 'first');
-    await saveWorkerFile(path, 'second');
-    expect(await readFile(path, 'utf8')).toBe('second');
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
-    expect(await readdir(directory)).toEqual(['state.json']);
-  } finally { await rm(directory, { recursive: true, force: true }); }
-});
-
 
 it('deploys an offline embedded snapshot with only a token and no KV', async () => {
   const f = fixture();
@@ -177,15 +157,14 @@ it('deploys an offline embedded snapshot with only a token and no KV', async () 
   expect(f.files.has(resolve(f.d.directory, 'secrets.json'))).toBe(false);
   expect(await setupWorker({ deploy: true }, f.d)).toContain(token);
 });
-it('migrates existing deployment state and preserves the URL without deleting KV', async () => {
+it('reuses an existing snapshot deployment and its subscription token', async () => {
   const f = fixture(); f.existing();
-  await setupWorker({ deploy: true }, f.d);
+  f.d.randomToken = () => { throw new Error('must reuse token'); };
+  expect(await setupWorker({ deploy: true }, f.d)).toContain(token);
   expect(JSON.parse(f.files.get(statePath)!)).toEqual({ accountId: account, name: 'pku2cal', token });
-  expect(JSON.parse(f.files.get(`${statePath}.pre-snapshot.bak`)!).namespaceId).toBe(namespace);
-  expect(f.calls.filter(c => c.args[0] === 'secret').map(c => c.args[2])).toEqual(['PKU_USERNAME', 'PKU_PASSWORD']);
-  expect(f.calls.some(c => c.args[0] === 'kv')).toBe(false);
+  expect(f.uploaded()).toEqual({ CALENDAR_TOKEN: token });
 });
-it.each(['missing-yaml', 'unknown-worker', 'missing-state', 'invalid-state', 'kv-conflict', 'missing-account'])('stops before deployment for %s', async kind => {
+it.each(['missing-yaml', 'unknown-worker', 'missing-state', 'invalid-state', 'wrong-target', 'missing-account'])('stops before deployment for %s', async kind => {
   const f = fixture();
   if (kind === 'missing-yaml') { const read = f.d.read; f.d.read = path => path === 'data/schedule.yaml' ? Promise.reject(new Error()) : read(path); }
   else {
@@ -193,7 +172,7 @@ it.each(['missing-yaml', 'unknown-worker', 'missing-state', 'invalid-state', 'kv
     if (kind === 'unknown-worker') f.cloud.bindings = [];
     if (kind === 'missing-state') f.files.delete(statePath);
     if (kind === 'invalid-state') f.files.set(statePath, 'broken');
-    if (kind === 'kv-conflict') f.files.set(statePath, JSON.stringify({ accountId: account, name: 'pku2cal', token, namespaceId: 'd'.repeat(32) }));
+    if (kind === 'wrong-target') f.files.set(statePath, JSON.stringify({ accountId: 'd'.repeat(32), name: 'pku2cal', token }));
     if (kind === 'missing-account') f.cloud.accounts.push({ id: 'd'.repeat(32) });
   }
   await expect(setupWorker({ deploy: true }, f.d)).rejects.toThrow();
@@ -207,18 +186,12 @@ it('keeps a newly rotated token on deploy failure and reuses it on retry', async
   expect(JSON.parse(f.files.get(statePath)!).token).toBe(rotated);
   f.cloud.failCommand = '';
   expect(await setupWorker({ deploy: true }, f.d)).toContain(rotated);
-  expect(JSON.parse(f.files.get(`${statePath}.pre-snapshot.bak`)!).token).toBe(token);
-});
-it('reports old secret cleanup failures after verified deployment', async () => {
-  const f = fixture(); f.existing(); f.cloud.failCommand = 'secret delete';
-  await expect(setupWorker({ deploy: true }, f.d)).rejects.toThrow('发布成功、旧 Secrets 清理未完成');
-  expect(f.writes()).toHaveLength(1);
 });
 it('rejects an unrelated valid calendar during deployment verification', async () => {
   const f = fixture(); f.cloud.failProbe = true;
   await expect(setupWorker({ deploy: true }, f.d)).rejects.toThrow('已完成部署');
   await expect(verifyWorker(`https://test.workers.dev/calendar/${token}.ics`, (async url => String(url).endsWith('/invalid.ics')
-    ? new Response('', { status: 404 }) : fresh(ics.replace('Synthetic', 'Other'))), async () => {}, ics)).rejects.toThrow('验证未通过');
+    ? new Response('', { status: 404 }) : calendarResponse(ics.replace('Synthetic', 'Other'))), async () => {}, ics)).rejects.toThrow('验证未通过');
 });
 it('requires local interactive deployment and refuses CI', async () => {
   const f = fixture();

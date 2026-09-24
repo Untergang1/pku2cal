@@ -3,12 +3,12 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { generateCalendar, type GeneratedCalendar } from '../application/generate.js';
 import { semesterStatus } from '../application/setup.js';
-import { savePagesState } from './pages-state.js';
+import { savePrivateFile } from './private-files.js';
 import { readCalendar, readLocalSnapshot, reportLocalError } from './local-data.js';
 
 export async function generateFile(options: { config: unknown; document: unknown; output: string; now: Date }): Promise<GeneratedCalendar> {
   const result = generateCalendar(options.document, options.config, options.now);
-  await savePagesState(resolve(options.output), result.ics);
+  await savePrivateFile(resolve(options.output), result.ics);
   return result;
 }
 export async function main(): Promise<void> {
@@ -29,7 +29,7 @@ export async function main(): Promise<void> {
       return;
     }
     const snapshot = await readLocalSnapshot(values);
-    if (!values.check) await savePagesState(resolve(values.output), snapshot.ics);
+    if (!values.check) await savePrivateFile(resolve(values.output), snapshot.ics);
     console.log(values.check ? '本地课表检查通过。' : '本地日历生成成功。');
   } catch (error) { reportLocalError(error); process.exitCode = 1; }
 }

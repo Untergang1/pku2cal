@@ -1,272 +1,44 @@
-# PKU Calendar — Reference Implementation Notes
+# 参考资料与实现依据
 
-目标：实现一个轻量的 **北京大学个人课表 → ICS 订阅** 服务。
+本文保留上游定位、已有核查依据和本项目与参考实现的差异。当前架构见[系统设计](design.md)，运行方法见 [README](../README.md)，验证范围见[验证边界](verification.md)。
 
-预期主流程：
+## 上游来源与许可证
 
-```text
-PKU IAAA
-  ↓
-elective.pku.edu.cn
-  ↓
-个人已选课程
-  ↓
-手动导入并编辑 data/schedule.yaml
-  ↓
-本地生成 ICS
-  ↓
-HTTP subscription endpoint
-```
+| 来源 | 用途与已有核查 | 复用边界 |
+| --- | --- | --- |
+| [pkucli](https://github.com/pkuinfo/pkucli/tree/0ad6dea1802abc98825dc57b07b75da4dee1c9f4) | 认证、会话及选课结果页面；已核查版本 `0ad6dea1802abc98825dc57b07b75da4dee1c9f4` | [MIT](https://github.com/pkuinfo/pkucli/blob/0ad6dea1802abc98825dc57b07b75da4dee1c9f4/LICENSE)，版权归 pkuinfo team；本项目独立实现，未复制源码 |
+| [PekingParser](https://github.com/dIT8Zv/WakeupSchedule_BUPT/blob/master/app/src/main/java/com/suda/yzune/wakeupschedule/schedule_import/parser/PekingParser.kt) | 北大时间字符串、多时段与单双周语义 | 既有记录已核对根目录 Apache-2.0；不复用固定列号及默认时间 |
+| [Sleepy](https://github.com/lingion/sleepy) 的 `ScheduleExporter.kt` | ICS 导出行为参考 | GPL-3.0；不复制实现 |
+| [RFC 5545](https://www.rfc-editor.org/rfc/rfc5545) | ICS 格式、文本转义和折行 | 日历格式依据 |
 
-## 1. PKU IAAA authentication
+修改上游集成或复用代码前，应重新核对所用版本、页面假设和许可证。
 
-Repository:
+## 认证与页面获取
 
-https://github.com/pkuinfo/pkucli
+pkucli 的定位文件：
 
-Primary reference:
+- `crates/common/src/iaaa.rs`：`IaaaConfig`、`login_password()`、`encrypt_password()`；扫码登录不是本项目支持的能力。
+- `crates/elective/src/client.rs`、`login.rs`：SSO 地址、Cookie 与重定向，以及主修／辅双学位选择。
+- `crates/elective/src/api.rs`：`SHOW_RESULTS`、`get_results()`、`follow_and_read()`、`parse_datagrid_table()`。
 
-```text
-crates/common/src/iaaa.rs
-```
+密码登录先 GET `https://iaaa.pku.edu.cn/iaaa/getPublicKey.do`，使用 RSA PKCS#1 v1.5 与 Base64 编码密码，再 POST `https://iaaa.pku.edu.cn/iaaa/oauthlogin.do`。选课应用使用 `app_id=syllabus`，认证字段的 `redirect_url` 为 `http://elective.pku.edu.cn:80/elective2008/ssoLogin.do`；实际选课请求升级为 HTTPS。
 
-Relevant implementation:
+携带 IAAA token 请求 `https://elective.pku.edu.cn/elective2008/ssoLogin.do` 后获取选课会话。只允许 IAAA 与选课系统两个 origin，手动处理 Cookie 和重定向，会话仅存在于一次导入的内存中。主修标识为 `bzx`，辅修／双学位为 `bfx`；本项目读取主修课表。
 
-- `IaaaConfig`
-- `login_password()`
-- `login_qrcode()`
-- `encrypt_password()`
+选课结果地址为 `https://elective.pku.edu.cn/elective2008/edu/pku/stu/elective/controller/electiveWork/showResults.do`，核心表格为 `table.datagrid`。既有真实页面核查发现：
 
-Current password login flow:
+- 表头包含课程号、课程名、课程类别、学分、周学时、教师、班号、开课单位、教室信息、选课结果、IP地址和操作时间；选课状态为“已选上”“未选上”。
+- 表尾存在空行与跨列分页行。解析需验证表头、身份、状态及分页；pkucli 的结果结构未保留课程号且未校验预期表头，不能直接作为本项目数据契约。
+- caption 可能只有“学期课程表”，没有可验证的学期编号。这种情况下必须由用户确认选课系统学期并设置日期窗口；系统日期不能替代确认。
 
-```text
-GET https://iaaa.pku.edu.cn/iaaa/getPublicKey.do
-↓
-RSA encrypt password
-↓
-POST https://iaaa.pku.edu.cn/iaaa/oauthlogin.do
-↓
-IAAA token
-```
+这些观察来自既有联调，不保证上游页面今后保持不变；原始认证页面和会话不应作为公开测试 fixture。
 
-For the elective system:
+## 时间语义与校历
 
-```text
-app_id = syllabus
-redirect_url =
-http://elective.pku.edu.cn:80/elective2008/ssoLogin.do
-```
+PekingParser 用于理解 `1~16周 周一1~2节 教101`、单双周及 `<br>` 分隔的同一课程多个时段。页面结构优先参考 pkucli 并核对真实页面；不要照搬旧解析器的固定 `<td>` 下标。
 
-Use this as the main reference for implementing `pku/auth`.
+公共学期目录的本部校历依据为[北大官方校历与作息](https://www.pku.edu.cn/detail/3377.html)。个人课表按 `Asia/Shanghai` 解释；校历与课表是独立输入。
 
----
+`pku-ss` 节次表由用户按实际观察提供，尚未经官方资料独立核实。第 8 节 `13:00–13:50` 是针对选课系统课时的手动映射，第 5–7 节维持 `14:00–16:50`。因此 5–8 节、7–8 节均覆盖 `13:00–16:50`；展开时需检查范围内所有节次，按实际时间取最早开始与最晚结束。用户核实上游恢复正常后，应修改该时间表中的对应节次。
 
-## 2. IAAA token → elective session
-
-Repository:
-
-https://github.com/pkuinfo/pkucli
-
-References:
-
-```text
-crates/elective/src/client.rs
-crates/elective/src/login.rs
-```
-
-Important URLs from `client.rs`:
-
-```text
-ELECTIVE_BASE
-https://elective.pku.edu.cn/elective2008
-
-SSO_LOGIN
-https://elective.pku.edu.cn/elective2008/ssoLogin.do
-
-OAUTH_REDIR
-http://elective.pku.edu.cn:80/elective2008/ssoLogin.do
-```
-
-`login.rs` implements:
-
-```text
-IAAA token
-↓
-GET ssoLogin.do?...&token=<token>
-↓
-follow redirects
-↓
-persist elective cookies
-```
-
-Also contains special handling for dual-degree accounts:
-
-```text
-bzx = major
-bfx = minor / dual-degree
-```
-
-For an MVP, this can be isolated behind the authentication layer rather than spread through the parser.
-
----
-
-## 3. Fetch current selected courses
-
-Repository:
-
-https://github.com/pkuinfo/pkucli
-
-Primary reference:
-
-```text
-crates/elective/src/api.rs
-```
-
-Relevant pieces:
-
-```text
-SHOW_RESULTS
-ElectiveApi::get_results()
-ElectiveApi::follow_and_read()
-parse_datagrid_table()
-```
-
-Current endpoint:
-
-```text
-https://elective.pku.edu.cn/elective2008/
-edu/pku/stu/elective/controller/electiveWork/showResults.do
-```
-
-Current implementation parses:
-
-```text
-table.datagrid
-→ tr
-→ td
-→ CourseData
-```
-
-Useful fields include:
-
-```text
-name
-category
-credit
-hours
-teacher
-class_id
-department
-classroom
-status
-```
-
-Prefer this repository for current URLs, authentication flow, redirect behavior, cookies, and page structure.
-
----
-
-## 4. PKU course-time parsing
-
-Primary upstream reference:
-
-https://github.com/dIT8Zv/WakeupSchedule_BUPT
-
-File:
-
-```text
-app/src/main/java/com/suda/yzune/wakeupschedule/
-schedule_import/parser/PekingParser.kt
-```
-
-Parser handles PKU-specific strings such as:
-
-```text
-1~16周 周一1~2节 教101
-1~16周 周三3~4节 教202
-2~16周 周五5~6节(单) 教303
-```
-
-Extract:
-
-```text
-start_week
-end_week
-weekday
-start_node
-end_node
-odd/even week
-room
-teacher
-course name
-```
-
-Important behavior:
-
-```text
-"<br>" → multiple schedule slots for one course
-
-contains("单") → odd weeks
-contains("双") → even weeks
-```
-
-Do not blindly copy fixed `<td>` indices from this parser. Its page assumptions are older.
-
-Use `pkucli/crates/elective/src/api.rs` as the primary source for the current HTML structure and use `PekingParser.kt` mainly for PKU time-string semantics.
-
-License: Apache-2.0.
-
----
-
-## 5. ICS generation
-
-Reference repository:
-
-https://github.com/lingion/sleepy
-
-File:
-
-```text
-app/src/main/java/com/lingion/sleepy/data/parser/
-ScheduleExporter.kt
-```
-
-Relevant functions:
-
-```text
-exportIcs()
-escapeIcs()
-```
-
-Useful recurrence model:
-
-```text
-normal course:
-RRULE:FREQ=WEEKLY
-
-odd/even course:
-RRULE:FREQ=WEEKLY;INTERVAL=2
-```
-
-Also inspect its handling of:
-
-```text
-DTSTART
-DTEND
-UNTIL
-BYDAY
-UID
-SUMMARY
-LOCATION
-DESCRIPTION
-ICS escaping
-```
-
-Use this as a behavioral reference only if possible. Sleepy is GPL-3.0; avoid copying GPL implementation into a project intended to use a more permissive license.
-
----
-
-## 本项目的实现边界
-
-目录和数据契约以 [系统设计](design.md) 为准。`pku` 负责内存会话、页面获取和结构解析，`schedule` 处理时间和校历，`calendar` 序列化 ICS，`application` 编排，`entrypoints` 处理文件和平台行为。认证与获取仅在 Node 显式导入时运行；本项目不持久化上游会话，Worker 仅提供随代码部署的 ICS 快照，不使用 KV。
-
-历史核查的上游版本、许可证与真实页面差异见 [验证变更日志](changelog.md)，当前边界见 [验证记录](verification.md)，运行与部署见 [README 使用说明](../README.md)。参考代码中的持久化会话、宽松错误处理和重复规则不是本项目的行为。
+Sleepy 的周重复规则仅作导出行为参考。本项目按实际教学日期展开为独立 VEVENT，以处理停补课和不连续教学周；UID 与 ICS 规则统一见[系统设计](design.md#日历规则与事件身份)。

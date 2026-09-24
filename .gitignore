@@ -10,16 +10,6 @@
 /data/
 *.ics
 
-# Python caches and local environments
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.pytest_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-
 # TypeScript / build and runtime caches
 node_modules/
 dist/

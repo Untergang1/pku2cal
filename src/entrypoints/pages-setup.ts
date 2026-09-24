@@ -7,7 +7,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
 import { readLocalSnapshot, withLock, reportLocalError } from './local-data.js';
 import { encodeSnapshot } from '../application/snapshot.js';
-import { newPagesToken, savePagesState, subscriptionUrl, validatePagesToken } from './pages-state.js';
+import { newPagesToken, subscriptionUrl, validatePagesToken } from './pages-state.js';
+import { savePrivateFile } from './private-files.js';
 
 export class PagesSetupError extends Error {}
 
@@ -124,8 +125,7 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
   }
   if (!token && !options.rotateToken) {
     const remote = await api('/actions/secrets/PAGES_CALENDAR_SNAPSHOT', 'GET', undefined, true);
-    const legacy = await api('/actions/secrets/PAGES_CALENDAR_TOKEN', 'GET', undefined, true);
-    if (remote !== null || legacy !== null) throw new PagesSetupError('本地 Pages 令牌文件缺失，但远端已有 Secret。请恢复 data/pages 下的私密文件，或使用 --rotate-token 更换订阅地址。');
+    if (remote !== null) throw new PagesSetupError('本地 Pages 令牌文件缺失，但远端已有 Secret。请恢复 data/pages 下的私密文件，或使用 --rotate-token 更换订阅地址。');
   }
   if (!token || options.rotateToken) {
     token = validatePagesToken(d.randomToken());
@@ -186,13 +186,6 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
       d.log('正在等待 GitHub 完成快照检查和部署…');
       await d.sleep(10_000);
     }
-    stage = '清理旧 Secrets';
-    const obsolete = ['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES', 'PKU_COURSE_SUPPLEMENTS', 'PAGES_CALENDAR_TOKEN'];
-    for (const name of obsolete) {
-      try {
-        if (await api(`/actions/secrets/${name}`, 'GET', undefined, true) !== null) await api(`/actions/secrets/${name}`, 'DELETE');
-      } catch { throw new PagesSetupError('发布成功、旧 Secrets 清理未完成；请重跑 pages:publish 完成清理。'); }
-    }
     stage = '获取订阅地址';
     const deployed = pagesSchema.parse(await api('/pages'));
     const url = subscriptionUrl(deployed.html_url, token);
@@ -213,7 +206,7 @@ export async function main(): Promise<void> {
       return;
     }
     await withLock(resolve('data/pages/publish.lock'), () => setupPages(true, {
-      command, read: path => readFile(path, 'utf8'), save: savePagesState, randomToken: newPagesToken, env: process.env,
+      command, read: path => readFile(path, 'utf8'), save: savePrivateFile, randomToken: newPagesToken, env: process.env,
       now: () => new Date(), sleep, log: message => console.log(message),
     }, { rotateToken: values['rotate-token'] === true, forcePublish: values['force-publish'] === true, config: values.config, schedule: values.schedule }));
   } catch (error) {

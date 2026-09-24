@@ -21,15 +21,15 @@ if (process.exitCode === 0) {
   // Exercise the one-command setup's actual generated config and secrets-file interface on both CI systems.
   const { deploymentConfig } = await import('../dist/entrypoints/worker-setup.js');
   const { workerCommand } = await import('../dist/entrypoints/worker-cloudflare.js');
-  const { saveWorkerFile } = await import('../dist/entrypoints/worker-state.js');
+  const { savePrivateFile } = await import('../dist/entrypoints/private-files.js');
   const { parse } = await import('jsonc-parser');
   const directory = await mkdtemp(resolve('.cache/worker-setup-check-'));
   try {
     const config = deploymentConfig(parse(await readFile('wrangler.jsonc', 'utf8')), 'pku2cal-check', 'a'.repeat(32));
     const configPath = resolve(directory, 'wrangler.json');
     const secretsPath = resolve(directory, 'secrets.json');
-    await saveWorkerFile(configPath, JSON.stringify(config));
-    await saveWorkerFile(secretsPath, JSON.stringify({ CALENDAR_TOKEN: 't'.repeat(43) }));
+    await savePrivateFile(configPath, JSON.stringify(config));
+    await savePrivateFile(secretsPath, JSON.stringify({ CALENDAR_TOKEN: 't'.repeat(43) }));
     await workerCommand(directory, { ...process.env, XDG_CONFIG_HOME: configDirectory })([
       'deploy', '--dry-run', '--config', configPath, '--secrets-file', secretsPath, '--outdir', resolve(directory, 'output'),
     ], { PKU_CONFIG_PATH: resolve('config/calendar.example.json'), PKU_SCHEDULE_PATH: resolve('config/schedule.example.yaml') });

@@ -1,11 +1,12 @@
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { encodeSnapshot } from '../../src/application/snapshot.js';
 import { calendarIdentity } from '../../src/calendar/compare.js';
 import { main, preparePages } from '../../src/entrypoints/pages-prepare.js';
-import { newPagesToken, savePagesState, subscriptionUrl, validatePagesToken } from '../../src/entrypoints/pages-state.js';
+import { newPagesToken, subscriptionUrl, validatePagesToken } from '../../src/entrypoints/pages-state.js';
+import { savePrivateFile } from '../../src/entrypoints/private-files.js';
 import { generateFromHtml } from '../fixtures/pipeline.js';
 import { config, course, timetable } from '../fixtures/timetable.js';
 
@@ -69,7 +70,7 @@ it.each(['missing', 'changed', 'forced'] as const)('stages only the new token pa
   const options = await fixture(reason === 'missing' ? new Response(null, { status: 404 }) : new Response(first.ics.replace('SUMMARY:', 'SUMMARY:old-')));
   options.force = reason === 'forced';
   await writeFile(join(options.directory, 'calendar.ics'), 'old root file');
-  await savePagesState(join(options.directory, 'old-token', 'calendar.ics'), 'old token file');
+  await savePrivateFile(join(options.directory, 'old-token', 'calendar.ics'), 'old token file');
   expect(await preparePages(options)).toEqual({ changed: true, reason });
   expect(await readdir(options.directory)).toEqual([token]);
   expect(await readFile(join(options.directory, token, 'calendar.ics'), 'utf8')).toBe(second.ics);
@@ -103,16 +104,6 @@ it('validates secret paths and supports actual Pages base paths', () => {
   for (const invalid of ['', '../secret', 'a'.repeat(43), 'a'.repeat(44)]) expect(() => validatePagesToken(invalid)).toThrow();
   expect(subscriptionUrl('https://calendar.test', token)).toBe(`https://calendar.test/${token}/calendar.ics`);
   for (const invalid of ['http://calendar.test', 'https://user:pass@calendar.test', 'https://calendar.test/?q=x']) expect(() => subscriptionUrl(invalid, token)).toThrow();
-});
-
-it('stores private state atomically with restrictive permissions', async () => {
-  const { directory } = await fixture();
-  const path = join(directory, 'owner', 'repo.json');
-  await savePagesState(path, 'first');
-  await savePagesState(path, 'second');
-  expect(await readFile(path, 'utf8')).toBe('second');
-  expect((await stat(path)).mode & 0o777).toBe(0o600);
-  expect(await readdir(join(directory, 'owner'))).toEqual(['repo.json']);
 });
 
 it('detects added courses, teacher edits, holiday and makeup changes', () => {

@@ -21,9 +21,9 @@
     "token": "node -e \"console.log(require('node:crypto').randomBytes(32).toString('base64url'))\"",
     "pages:prepare": "npm run build && node dist/entrypoints/pages-prepare.js",
     "schedule:pull": "npm run build && node --env-file-if-exists=.env dist/entrypoints/schedule-pull.js",
-    "schedule:migrate": "npm run build && node --env-file-if-exists=.env dist/entrypoints/schedule-pull.js --migrate",
     "schedule:check": "npm run build && node dist/entrypoints/node.js --check",
-    "pages:publish": "npm run build && node dist/entrypoints/pages-setup.js"
+    "pages:publish": "npm run build && node dist/entrypoints/pages-setup.js",
+    "prebuild": "node scripts/prune-build.mjs"
   },
   "dependencies": {
     "cheerio": "1.2.0",

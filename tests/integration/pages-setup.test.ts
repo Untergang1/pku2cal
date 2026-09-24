@@ -67,11 +67,10 @@ function fixture(options: {
           if (path.endsWith('/dispatches')) return response(options.dispatchId === false ? null : { workflow_run_id: 123 });
           return response(null, method === 'POST' ? 201 : 204);
         }
-        if (path.startsWith('/actions/secrets/') && !path.endsWith('/PAGES_CALENDAR_TOKEN')) return response(null, 404);
         switch (path) {
           case '': return response({ default_branch: 'main', archived: false, permissions: { push: true } });
           case '/commits/main': return response({ sha: ++reads > 1 && options.changedSha ? otherSha : options.remoteSha ?? sha });
-          case '/actions/secrets/PAGES_CALENDAR_TOKEN': return options.remoteToken ? response({ name: 'PAGES_CALENDAR_TOKEN' }) : response(null, 404);
+          case '/actions/secrets/PAGES_CALENDAR_SNAPSHOT': return options.remoteToken ? response({ name: 'PAGES_CALENDAR_SNAPSHOT' }) : response(null, 404);
           case '/actions/workflows/pages.yml': return response({ state: 'disabled_manually' });
           case '/pages':
             if (++pagesRead === 1 && (options.pages ?? 'missing') === 'missing') return response({ message: 'Not Found' }, 404);
@@ -289,7 +288,9 @@ it('rotates explicitly and forces publication, then reuses the saved token on re
   const dispatch = f.calls.find(c => c.args[1]?.endsWith('/dispatches'))!;
   expect(JSON.parse(dispatch.input!).inputs).toMatchObject({ force_publish: true, snapshot_id: expect.stringMatching(/^[a-f0-9]{64}$/) });
   await setupPages(true, f.d);
-  expect(f.calls.filter(c => c.args[2] === 'PAGES_CALENDAR_TOKEN').every(c => c.input === token)).toBe(true);
+  const snapshots = f.calls.filter(c => c.args[0] === 'secret' && c.args[2] === 'PAGES_CALENDAR_SNAPSHOT');
+  expect(snapshots).toHaveLength(2);
+  expect(snapshots[1]!.input).toBe(snapshots[0]!.input);
 });
 
 it('accepts an explicitly unchanged run, but not for forced publication', async () => {
@@ -312,15 +313,4 @@ it('rejects the unfilled SS table before uploading secrets or changing GitHub se
   const f = fixture({ selectedTimetable: 'pku-ss' });
   await expect(setupPages(true, f.d)).rejects.toMatchObject({ guidance: expect.stringContaining('config/timetables/pku-ss.json') });
   expect(f.calls.some(call => call.args.includes('--method') && call.args[call.args.indexOf('--method') + 1] !== 'GET')).toBe(false);
-});
-
-
-it('reports successful publication separately from old secret cleanup failure', async () => {
-  const f = fixture({ localToken: token });
-  const command = f.d.command;
-  f.d.command = async (program, args, input) => {
-    if (args[1]?.endsWith('/actions/secrets/PKU_PASSWORD')) return args.includes('GET') ? response({ name: 'PKU_PASSWORD' }) : response({}, 403);
-    return command(program, args, input);
-  };
-  await expect(setupPages(true, f.d)).rejects.toThrow('发布成功、旧 Secrets 清理未完成');
 });
