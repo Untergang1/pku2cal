@@ -121,9 +121,9 @@ Worker 提供你本次部署的日历，不访问选课系统。它不经过 Pag
 
 请私密备份 `data/worker/`，以便复用令牌。多账号、Worker 命名、轮换令牌及故障处理见 [Worker 进阶操作](docs/advanced.md#cloudflare-worker-进阶操作)。
 
-## 课表变化后怎么更新
+## 手动补充或修改课表信息
 
-只想修改教室、增删课程或调整时间时，编辑 `data/schedule.yaml`，然后运行 `npm run schedule:check`。检查、生成和发布都以这份本地文件为准，不会重新登录选课系统，也不会覆盖你的编辑。
+编辑 `data/schedule.yaml`，然后运行 `npm run schedule:check`。检查、生成和发布都以这份本地文件为准，不会重新登录选课系统，也不会覆盖你的编辑。
 
 如果希望重新获取选课系统中的课表，运行：
 
