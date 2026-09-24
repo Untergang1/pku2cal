@@ -87,7 +87,7 @@ npm run generate -- --config config/calendar.json --schedule data/custom.yaml --
 
 个人 YAML 保存课程，校历配置保存学期、首周周一、教学周数、作息表、停课日期和补课映射。两份文件的学期必须一致。校历结构示例见 [calendar.example.json](../config/calendar.example.json)。
 
-当前只收录校本部 2026–2027 第一学期校历；`setup` 按北京时间选择已收录的校本部预设，默认输出 `config/calendar.json`。仓库附带的该文件已选择软微作息，与校本部预设不同，直接运行 `setup` 会提示已有不同配置并保留原文件。日常使用可直接编辑现有配置，再运行 `npm run status`。
+当前只收录校本部 2026–2027 第一学期校历；`setup` 按北京时间选择已收录的学期预设，默认使用软微作息（`pku-ss`），输出 `config/calendar.json`。仓库附带的该文件也使用软微作息。日常使用可直接编辑现有配置，再运行 `npm run status`。
 
 若要明确选择已收录学期并另外创建一份配置：
 

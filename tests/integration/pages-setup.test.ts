@@ -8,6 +8,7 @@ const token = Buffer.alloc(32, 1).toString('base64url');
 const sha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
 const config = JSON.parse(await readFile(new URL('../../config/pku-main-2026-2027-1.json', import.meta.url), 'utf8'));
+config.timetable = 'pku-main'; // This fixture uses an invalid pku-ss table to test validation.
 config.semesterBinding = { confirmedSemester: '2026-2027-1', validFrom: '2026-09-07', validThrough: '2027-01-10' };
 const response = (data: unknown, status = 200): CommandResult => ({
   code: status >= 400 ? 1 : 0,

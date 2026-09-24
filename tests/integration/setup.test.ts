@@ -16,7 +16,7 @@ it('initializes the confirmed autumn semester from the official calendar', async
   const automatic = selectSemester(presets, now);
   expect(automatic).toEqual(selectSemester(presets, now, '2026-2027-1'));
   expect(automatic.config.semesterBinding).toEqual({ confirmedSemester: '2026-2027-1', validFrom: '2026-09-07', validThrough: '2027-01-10' });
-  expect(automatic.config.timetable).toBe('pku-main');
+  expect(automatic.config.timetable).toBe('pku-ss');
   expect(automatic.config).not.toHaveProperty('periods');
   expect((await resolveCalendarConfig(automatic.config)).config.periods).toHaveLength(12);
   expect(automatic.config.teachingWeeks).toBe(16);
@@ -52,7 +52,7 @@ it('preserves configuration and namespace when setup is rerun', async () => {
   const original = await readFile(path, 'utf8');
   await expect(initializeCalendar(path, { ...selection.config, namespace: 'changed-namespace' })).rejects.toThrow('setup:exists');
   expect(await readFile(path, 'utf8')).toBe(original);
-  const custom = JSON.stringify({ ...selection.config, timetable: 'pku-ss' });
+  const custom = JSON.stringify({ ...selection.config, timetable: 'pku-main' });
   await writeFile(path, custom);
   await expect(initializeCalendar(path, selection.config)).rejects.toThrow('setup:exists');
   expect(await readFile(path, 'utf8')).toBe(custom);

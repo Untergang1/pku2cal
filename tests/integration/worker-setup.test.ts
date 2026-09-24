@@ -41,7 +41,7 @@ function fixture() {
       if (path === 'wrangler.jsonc') return JSON.stringify(wrangler);
       if (path === 'data/schedule.yaml') return JSON.stringify({ version: 1, semester: '2026-2027-1', courses: [] });
       if (path === 'config/calendar.json') return JSON.stringify(config);
-      if (path.endsWith('/config/timetables/pku-main.json')) return readFile(path, 'utf8');
+      if (path.endsWith(`/config/timetables/${config.timetable}.json`)) return readFile(path, 'utf8');
       if (files.has(path)) return files.get(path)!;
       throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     },

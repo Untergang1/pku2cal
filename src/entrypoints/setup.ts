@@ -44,7 +44,7 @@ export async function main(): Promise<void> {
   try {
     const { values } = parseArgs({ options: { semester: { type: 'string' }, output: { type: 'string', default: 'config/calendar.json' }, help: { type: 'boolean' } }, strict: true });
     if (values.help) {
-      console.log('用法：npm run setup [-- --semester 2026-2027-1] [--output config/calendar.json]\n默认按北京时间选择已核实的校本部校历，自动填入拉取起止日期。');
+      console.log('用法：npm run setup [-- --semester 2026-2027-1] [--output config/calendar.json]\n默认按北京时间选择已核实的校本部校历，使用软微作息，自动填入拉取起止日期。');
       return;
     }
     const now = new Date();
