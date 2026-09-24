@@ -34,8 +34,9 @@ export function workerCommandEnv(parent: NodeJS.ProcessEnv, directory: string, e
   for (const key of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL']) {
     if (parent[key]) env[key] = parent[key];
   }
+  // Wrangler emits auth-token and KV-list JSON at `log`; `info` suppresses that output.
   return { ...env, ...extra, CI: 'true', WRANGLER_SEND_METRICS: 'false',
-    WRANGLER_LOG_PATH: resolve(directory, 'logs'), WRANGLER_LOG: 'info', WRANGLER_LOG_SANITIZE: 'true',
+    WRANGLER_LOG_PATH: resolve(directory, 'logs'), WRANGLER_LOG: 'log', WRANGLER_LOG_SANITIZE: 'true',
     CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: 'false', CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false' };
 }
 

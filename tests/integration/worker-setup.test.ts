@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { expect, it } from 'vitest';
 import { setupWorker, withWorkerSetupDirectory, type WorkerSetupDependencies } from '../../src/entrypoints/worker-setup.js';
-import { cloudflareReader, verifyWorker, workerCommandEnv } from '../../src/entrypoints/worker-cloudflare.js';
+import { cloudflareReader, verifyWorker, workerCommand, workerCommandEnv } from '../../src/entrypoints/worker-cloudflare.js';
 import { saveWorkerFile, workerState } from '../../src/entrypoints/worker-state.js';
 
 const account = 'a'.repeat(32);
@@ -276,6 +276,17 @@ it('suppresses API bodies, redirects and network errors while preserving HTTP st
   await expect(cloudflareReader('private', account, request)('/workers/subdomain')).rejects.toThrow('HTTP 403');
   const broken = (async () => { throw new Error('synthetic-private-password'); }) as typeof fetch;
   await expect(cloudflareReader('private', account, broken)('/workers/subdomain')).rejects.not.toThrow('synthetic-private-password');
+});
+
+it('preserves real Wrangler auth JSON output with a synthetic token and no Cloudflare requests', async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), 'pku2cal-worker-auth-'));
+  try {
+    const configPath = resolve(directory, 'wrangler.json');
+    await saveWorkerFile(configPath, JSON.stringify({ name: 'synthetic-worker', compatibility_date: '2026-09-24' }));
+    const command = workerCommand(directory, { CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token' });
+    const output = await command(['auth', 'token', '--json', '--config', configPath]);
+    expect(JSON.parse(output)).toEqual({ type: 'api_token', token: 'synthetic-cloudflare-token' });
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 it.each([null, undefined])('does not mistake a successful but empty API result for a missing Worker: %s', async result => {

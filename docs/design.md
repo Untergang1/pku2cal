@@ -100,7 +100,7 @@ workflow 使用 configure-pages 的 base_url 支持实际项目路径和自定�
 
 部署职责分为 `entrypoints/worker-setup`（编排、公共配置生成及本机锁）、`worker-state`（私密状态验证和原子写入）与 `worker-cloudflare`（受控 Wrangler 子进程、Cloudflare 配置读取及 HTTP 验证）。Wrangler JSONC 使用 jsonc-parser 解析。认证、课表生成和 Worker HTTP 运行逻辑不依赖这些部署模块。
 
-初始化通过 Wrangler `whoami --json`、`auth token --json` 使用已有 OAuth／API Token 登录，不解析 Wrangler 私有凭据存储格式（[官方命令说明](https://developers.cloudflare.com/workers/wrangler/commands/general/)）。Cloudflare REST API 仅用于读取账号子域名、Worker bindings 与 workers.dev 启用状态；请求固定 API origin、拒绝重定向、30 秒超时，并隐藏原始错误。KV 的分页查询与创建、代码和 Secrets 发布均通过项目锁定版本的 Wrangler CLI 完成；部署固定目标账号和认证令牌。代码与 Secrets 同次发布使用官方 [`--secrets-file` 接口](https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code)。
+初始化通过 Wrangler `whoami --json`、`auth token --json` 使用已有 OAuth／API Token 登录，不解析 Wrangler 私有凭据存储格式（[官方命令说明](https://developers.cloudflare.com/workers/wrangler/commands/general/)）。子进程固定使用 `WRANGLER_LOG=log`，保留认证令牌和 KV 列表命令的 JSON 输出；`info` 会屏蔽这些输出。输出仅在进程内解析，不转发到终端。Cloudflare REST API 仅用于读取账号子域名、Worker bindings 与 workers.dev 启用状态；请求固定 API origin、拒绝重定向、30 秒超时，并隐藏原始错误。KV 的分页查询与创建、代码和 Secrets 发布均通过项目锁定版本的 Wrangler CLI 完成；部署固定目标账号和认证令牌。代码与 Secrets 同次发布使用官方 [`--secrets-file` 接口](https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code)。
 
 首次随机令牌与 Pages 独立，以 `0600` 权限原子保存到忽略的 `data/worker/<account>/<name>.json`，字段为 `accountId`、`name`、`token` 和可选 `namespaceId`；令牌必须先于任何云端写入保存。KV 创建后补全 namespace ID。命令重跑复用 KV 和令牌；若创建响应丢失，本地已有状态时可按确定名称 `<name>-CALENDAR_KV` 恢复。没有本地状态时不自动接管同名 KV。远端已有订阅令牌而本地状态缺失时停止，要求恢复文件或显式 `--rotate-token`；损坏文件始终停止。本地、公开配置与远端 KV 冲突或 namespace 不可访问时停止，不替换缓存。
 

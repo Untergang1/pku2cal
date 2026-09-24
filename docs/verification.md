@@ -75,3 +75,9 @@
 - 本地 Linux / Node.js 22.23.2：类型检查、构建和全部 231 项测试通过；帮助命令可用。`npm run worker:check` 对仓库配置和一键命令生成的配置均执行真实 Wrangler `deploy --dry-run`；后者包含合成 `--secrets-file`，验证配置路径、构建 cwd 和 Secrets 参数可用，未发布。
 - 相同的测试与两种 dry-run 已纳入现有 macOS／Linux CI 命令；本次未执行远端 CI，macOS 结果仍待验证。README 和设计文档已更新，私密状态、运行目录和生成配置均由现有 `/data/` 忽略规则覆盖。
 - 用户已报告 GitHub Pages 部署完成；本次未独立访问其私密订阅链接。未登录 Cloudflare、上传真实 Secrets、创建云端资源、发布 Worker 或推送提交。Cloudflare 云端访问北大、真实订阅地址及日历客户端显示仍须首次部署后验收。
+
+## Worker 初始化 JSON 输出修复（2026-09-24）
+
+- 确认 Wrangler 4.137.0 在 `WRANGLER_LOG=info` 下会屏蔽 `auth token --json` 的标准输出，导致账号识别后解析空字符串失败；改为 `log`，同时保留输出捕获、日志脱敏和临时目录清理。
+- 新增使用合成 API Token 调用真实 Wrangler CLI 的离线回归，验证认证 JSON 可正常解析；不使用真实凭据或请求 Cloudflare。此用例纳入现有 macOS／Linux CI 测试命令。
+- 本地 Linux：`npm test -- tests/integration/worker-setup.test.ts` 的 43 项测试通过。macOS 尚待 CI 验证；本次修复未创建云端资源、上传 Secrets 或部署 Worker。
