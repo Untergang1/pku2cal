@@ -25,9 +25,19 @@ npm run probe:worker
 
 ## 校历与生成
 
-从 `config/calendar.example.json` 创建校历配置。示例仅用于离线测试，不是官方校历。个人试验配置放在 `data/calendar.json`；部署使用经过核实且可公开的 `config/calendar.json`。
+首次使用运行以下命令，无需手工填写日期：
 
-`config/pku-main-2026-2027-1.json` 根据 [北京大学官方校历](https://www.pku.edu.cn/detail/3377.html) 整理，仅适用校本部 2026–2027 第一学期：9 月 7 日起上课，12 月 28 日起停课复习考试，因此普通授课按 16 周配置；含 12 节作息及中秋、国庆停课。官方明确部分公休日课程照常进行，因此没有套用社会通用调休或添加补课映射。选用前仍需确认账号学期、校区与课程特殊安排；该文件不会自动成为部署配置。
+```sh
+npm run setup
+npm run status
+npm run generate
+```
+
+`setup` 按当前北京时间选择 `config/semesters.json` 中已核实的校本部校历，将显式学期绑定及生成有效期写入 `config/calendar.json`。`status` 不登录，只显示学期和日期检查结果。`generate` 默认读取该配置，输出 `data/calendar.ics`。仓库当前配置已绑定用户确认的 2026–2027 秋季学期。
+
+可用 `npm run setup -- --semester 2026-2027-1 --output data/calendar.json` 显式选择学期和输出位置。重复初始化相同配置不会修改文件，已有不同配置不会覆盖。系统时间只能用于匹配校历，不能证明选课系统的实际学期；请核实所选学期与账号一致。未收录或有多个匹配学期时会给出提示，不猜测日期。新学期需先依据官方校历补充目录及对应文件，再选择新配置；生成任务不会自动切换学期。`config/calendar.example.json` 仅用于离线测试，不是官方校历。
+
+`config/pku-main-2026-2027-1.json` 根据 [北京大学官方校历](https://www.pku.edu.cn/detail/3377.html) 整理，仅适用校本部 2026–2027 第一学期：2026 年 9 月 7 日起上课，12 月 28 日至 2027 年 1 月 10 日停课复习考试，1 月 11 日起放寒假。产品据此将生成有效期设为 **2026-09-07 至 2027-01-10**（含首尾两天），普通授课按 16 周计算，至 12 月 27 日结束；考试周不会凭空生成考试事件。配置含 12 节作息及中秋、国庆停课。官方明确部分公休日课程照常进行，因此没有套用社会通用调休或添加补课映射。选用前需确认校区及课程特殊安排。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -51,7 +61,7 @@ npm run generate -- --config data/calendar.json --output data/calendar.ics
 
 ### 人工绑定学期
 
-上游页面没有学期编号时，必须先由账号使用者确认当前选课学期，再在配置中加入 `semesterBinding`。示例结构如下；示例日期不代表账号已经确认，需改成实际允许生成的范围：
+上游页面没有学期编号时，需要账号使用者确认当前选课学期，再通过 `setup` 写入 `semesterBinding`；也可手动配置。当前已确认的秋季学期结构如下：
 
 ```json
 {
@@ -87,13 +97,13 @@ npm run generate -- --config data/calendar.json --output data/calendar.ics
 
 列表含个人选课信息，不得提交。提供方式任选一种：
 
-- 本地：在忽略的 `data/calendar.json` 中加入 `unscheduledCourses` 数组；或在 `.env` 的 `PKU_UNSCHEDULED_COURSES` 中放置该数组的 JSON 字符串。
+- 本地：推荐将数组保存在忽略的 JSON 文件中，在 `.env` 设置 `PKU_UNSCHEDULED_COURSES_FILE=data/unscheduled-courses.review.json`，或使用 `--confirmations <json>` 参数。也可在忽略的校历中加入 `unscheduledCourses` 数组，或在 `.env` 的 `PKU_UNSCHEDULED_COURSES` 中放置数组 JSON 字符串。
 - Actions：将数组 JSON 保存为 `PKU_UNSCHEDULED_COURSES` Secret，workflow 已接入；不在可提交的校历文件中加入个人列表。
 - Worker：通过 `npx wrangler secret put PKU_UNSCHEDULED_COURSES` 配置运行时 Secret；本地开发在 `.dev.vars` 中设置。Worker 构建拒绝打包包含非空个人列表的校历。
 
-本地 `.env` 写法为 `PKU_UNSCHEDULED_COURSES='[{"semester":"...",...}]'`，外层单引号用于包住完整 JSON。未设置或留空表示没有确认项。配置和 Secret 同时提供列表时会报错，避免静默覆盖。确认列表加入有效配置指纹，因此修改确认项会隔离旧缓存。
+本地内联写法为 `PKU_UNSCHEDULED_COURSES='[{"semester":"...",...}]'`，外层单引号用于包住完整 JSON。文件来源与非空内联值不能同时使用，校历和外部来源也不能同时提供列表。未设置任何来源表示没有外部确认项。文件路径选项仅用于 Node；部署时将文件内容保存为 Secret。确认列表加入有效配置指纹，因此修改确认项会隔离旧缓存。
 
-**当前真实联调状态：**机制已实现；账号实际学期、允许生成的起止日期及具体课程确认尚待用户完成，不能将该账号标记为端到端验收通过。待确认清单仅保存在忽略的 `data/`，默认 `confirmed: false`；详见 [验证记录](verification.md)。
+**当前真实联调状态：**用户已确认秋季学期及无固定时间课程；私密确认文件已绑定对应学期。Node 和本地 Worker 均已成功生成真实日历，并核对事件一致性与有效日期。确认文件及日历仅保存在忽略的 `data/`；详见 [验证记录](verification.md)。
 
 ## GitHub Actions 与 Pages
 

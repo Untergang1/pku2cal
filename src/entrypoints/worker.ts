@@ -113,13 +113,3 @@ export function createWorker(config: unknown, dependencies: {
     },
   };
 }
-
-// Supplied by scripts/build-worker.mjs. Kept out of the shared application core.
-declare const __CALENDAR_CONFIG__: unknown;
-let deployed: ReturnType<typeof createWorker> | undefined;
-export default {
-  fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    deployed ??= createWorker(__CALENDAR_CONFIG__);
-    return deployed.fetch(request, env);
-  },
-};

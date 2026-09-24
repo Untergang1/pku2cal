@@ -7,6 +7,27 @@ import { cacheIdentity } from '../../src/entrypoints/worker.js';
 import type { CalendarStore } from '../../src/entrypoints/worker.js';
 import { configWithPrivateConfirmations } from '../../src/application/config.js';
 
+it('starts the production deployment entry and serves its configured KV snapshot', async () => {
+  const token = 't'.repeat(43);
+  const runtime = await workerRuntime('src/entrypoints/worker-deploy.ts', {
+    PKU_USERNAME: { type: 'text', value: 'synthetic' },
+    PKU_PASSWORD: { type: 'text', value: 'synthetic-password' },
+    CALENDAR_TOKEN: { type: 'text', value: token },
+    CALENDAR_KV: { type: 'kv', id: 'production-entry-test' },
+  }, { __CALENDAR_CONFIG__: JSON.stringify(config) });
+  try {
+    const generated = generateFromHtml(timetable(), config, new Date());
+    const identity = cacheIdentity(config, 'synthetic');
+    const { CALENDAR_KV: kv } = await runtime.getBindings<{ CALENDAR_KV: CalendarStore }>();
+    await kv.put(identity.key, JSON.stringify({ ...generated, fingerprint: identity.fingerprint }));
+    const response = await runtime.dispatchFetch(`http://localhost/calendar/${token}.ics`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-calendar-status')).toBe('fresh');
+    expect(await response.text()).toBe(generated.ics);
+    expect((await runtime.dispatchFetch('http://localhost/calendar/wrong.ics')).status).toBe(404);
+  } finally { await runtime.dispose(); }
+});
+
 it.each([false, true])('runs the complete pipeline with workerd and KV (manual confirmation: %s)', async manual => {
   const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const pem = keys.publicKey.export({ format: 'pem', type: 'spki' }).toString();

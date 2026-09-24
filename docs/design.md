@@ -53,7 +53,7 @@ docs/            # 系统设计、参考资料及使用说明
   workflows/     # 跨平台 CI、定时生成与 Pages 发布
 ```
 
-- `pku/` 内分别设置 `auth`、`elective`、`parser` 模块，无需再建目录层级。`entrypoints/` 分设 Node.js 与 Worker 入口：前者供本地与 Actions 共用，负责配置读取和文件输出；后者负责令牌、KV、刷新及 HTTP 响应。Pages 发布由 workflow 承担。
+- `pku/` 内分别设置 `auth`、`elective`、`parser` 模块，无需再建目录层级。`entrypoints/node` 供本地与 Actions 共用，负责配置读取和文件输出；`entrypoints/worker` 负责令牌、KV、刷新及 HTTP 响应；`worker-deploy` 仅导出部署处理器，避免 workerd 将测试辅助导出当作额外入口。`entrypoints/setup` 负责本地校历目录读取与初始化。Pages 发布由 workflow 承担。
 - 入口调用 `application`，由它编排 `pku → schedule → calendar`，核心不反向依赖入口。模块导出自己的数据类型，通过明确契约传递，不预设公共 `utils` 或全局 `types` 目录。
 - `config/` 存放配置数据；共用配置校验属于 `application`，环境相关的读取与注入属于入口。网络、时钟等外部能力通过参数传入；文件系统、KV 和部署操作留在对应入口或 workflow。
 - 根目录放置包清单、依赖锁文件、TypeScript、测试与 Wrangler 配置，随实现引入。本地私密数据放在已忽略的 `data/`，凭据使用未跟踪的环境文件；构建及工具缓存目录在引入时加入 `.gitignore`。测试样例不得包含真实个人数据。
@@ -70,7 +70,9 @@ docs/            # 系统设计、参考资料及使用说明
 
 页面缺少学期标识时，使用显式 `semesterBinding`：`confirmedSemester` 必须等于顶层学期，`validFrom`、`validThrough` 是包含首尾两天的上海日期范围。仅在范围内允许生成；请求上游前和获取完成后均检查，Node 写入替换前及 Worker 写入 KV 前再检查。该范围限制生成时机，不裁剪课程事件日期。上游存在矛盾学期标识时拒绝生成；没有人工绑定时仍要求上游标识匹配。
 
-无固定时间课程使用 `unscheduledCourses` 确认列表：每项包含学期、课程号、班号、`confirmed: true` 和完整 `expectedSegments`。只跳过匹配且说明未改变的课程；可解析的固定时段不能标记为无固定时间。确认列表属于个人选课数据，仅来自忽略的本地校历或 `PKU_UNSCHEDULED_COURSES` 环境变量／Secret；与校历一起组成有效配置指纹。Worker 构建不打包非空个人列表。列表中的课程退选后可正常生成完整快照。
+`application/setup` 按北京时间从经过整理的官方校历中选择唯一有效学期，也支持显式学期参数；不按月份猜测或在定时生成时切换学期。`config/semesters.json` 记录学期、显示名称、校历文件、有效期末日和官方来源；初日取首周周一，末日取校历确定的学期结束日，教学周数独立配置。初始化写入显式绑定，保留已有不同配置及命名空间；系统日期匹配不替代用户对选课系统学期的确认。
+
+无固定时间课程使用 `unscheduledCourses` 确认列表：每项包含学期、课程号、班号、`confirmed: true` 和完整 `expectedSegments`。只跳过匹配且说明未改变的课程；可解析的固定时段不能标记为无固定时间。确认列表属于个人选课数据，来自忽略的本地校历、Node 私密 JSON 文件（`--confirmations` 或 `PKU_UNSCHEDULED_COURSES_FILE`），或 `PKU_UNSCHEDULED_COURSES` 环境变量／Secret；多个来源冲突时报错。文件读取留在 Node 入口，Worker 使用运行时 Secret。确认项与校历一起组成有效配置指纹。Worker 构建不打包非空个人列表。列表中的课程退选后可正常生成完整快照。
 
 ## 4. 运行入口与失败处理
 
@@ -84,7 +86,7 @@ KV 保存最近成功的 ICS、生成时间和配置指纹，按账号、学期�
 
 成功响应使用 `text/calendar; charset=utf-8`；日历客户端自行决定订阅刷新时间。凭据仅来自 Actions Secrets、Worker Secrets 或未跟踪的本地配置。日志只记录阶段、错误类别和耗时，不记录凭据、会话、原始页面、课表或完整订阅地址。
 
-入口接口：Node 命令为 `npm run generate -- --config <json> --output <ics>`，成功后同目录临时文件原子替换；Worker 使用 `CALENDAR_KV` 绑定和 `PKU_USERNAME`、`PKU_PASSWORD`、`CALENDAR_TOKEN` Secrets。Wrangler 的 custom build 从 `PKU_CONFIG_PATH`（默认 `config/calendar.json`）读取并校验配置，打包进 Worker；不将 Secrets 打包。`npm run worker:check` 使用合成示例完成不发布的构建检查。
+入口接口：`npm run setup` 初始化校历，`npm run status` 仅显示日期状态；`npm run generate` 默认读取 `config/calendar.json`，输出 `data/calendar.ics`，可用 `--config <json> --output <ics>` 覆盖。成功后同目录临时文件原子替换。Worker 使用 `CALENDAR_KV` 绑定和 `PKU_USERNAME`、`PKU_PASSWORD`、`CALENDAR_TOKEN` Secrets。Wrangler 的 custom build 从 `PKU_CONFIG_PATH`（默认 `config/calendar.json`）读取并校验配置，打包进 Worker；不将 Secrets 打包。`npm run worker:check` 使用合成示例完成不发布的构建检查。
 
 Worker 成功响应使用 `Last-Modified` 表示快照生成时间、`X-Calendar-Status: fresh|stale` 标示缓存状态，设置 `Cache-Control: private, no-store`，防止令牌轮换后中间缓存继续提供日历。KV 写入失败也保留旧版；配置错误与无可用副本返回 `503`。Pages workflow 通过仓库变量 `PUBLISH_CALENDAR=true` 显式启用，生成和上传成功后才执行部署。
 
@@ -95,4 +97,4 @@ Worker 成功响应使用 `Last-Modified` 表示快照生成时间、`X-Calendar
 3. **接入两个入口**：相同输入与生成时间产生一致 ICS；覆盖令牌错误、缓存命中与过期、上游失败保留旧版、无副本 `503`、配置切换隔离和静态发布失败保留产物。
 4. **配置跨平台验证**：macOS、Linux 使用相同的依赖安装、构建及测试命令，提交依赖锁文件；Wrangler 使用构建或 dry-run 检查。真实账号联调使用本地私密数据，CI 不依赖登录凭据。
 
-真实账号认证与课表获取已在 Node.js 和本地 workerd 验证。实际课表缺少学期标识，并含无可解析时间的已选课程；现支持人工绑定及明确的无固定时间确认，但实际学期、有效期和具体课程确认尚待完成。离线验证、云端验证与待办边界详见 [验证记录](verification.md)。
+真实账号认证、课表获取与日历生成已在 Node.js 和本地 workerd 验证。实际课表缺少学期标识，并含无可解析时间的已选课程；已按用户确认绑定秋季学期及无固定时间课程，并核对两入口事件一致性。离线验证、云端验证与待办边界详见 [验证记录](verification.md)。
