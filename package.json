@@ -20,6 +20,7 @@
     "worker:deploy": "npm run build && node dist/entrypoints/worker-setup.js",
     "token": "node -e \"console.log(require('node:crypto').randomBytes(32).toString('base64url'))\"",
     "pages:prepare": "npm run build && node dist/entrypoints/pages-prepare.js",
+    "calendar:pull": "npm run build && node dist/entrypoints/calendar-pull.js",
     "schedule:pull": "npm run build && node --env-file-if-exists=.env dist/entrypoints/schedule-pull.js",
     "schedule:check": "npm run build && node dist/entrypoints/node.js --check",
     "pages:publish": "npm run build && node dist/entrypoints/pages-setup.js",

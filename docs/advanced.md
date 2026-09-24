@@ -87,7 +87,7 @@ npm run generate -- --config config/calendar.json --schedule data/custom.yaml --
 
 个人 YAML 保存课程，校历配置保存学期、首周周一、教学周数、作息表、停课日期和补课映射。两份文件的学期必须一致。校历结构示例见 [calendar.example.json](../config/calendar.example.json)。
 
-当前只收录校本部 2026–2027 第一学期校历；`setup` 按北京时间选择已收录的学期预设，默认使用软微作息（`pku-ss`），输出 `config/calendar.json`。仓库附带的该文件也使用软微作息。日常使用可直接编辑现有配置，再运行 `npm run status`。
+离线预设只收录校本部 2026–2027 第一学期校历；`setup` 按北京时间选择已收录的学期预设，默认使用软微作息（`pku-ss`），输出 `config/calendar.json`。仓库附带的该文件也使用软微作息。日常使用可直接编辑现有配置，再运行 `npm run status`。
 
 若要明确选择已收录学期并另外创建一份配置：
 
@@ -96,7 +96,32 @@ npm run setup -- --semester 2026-2027-1 --output data/calendar.json
 npm run status -- --config data/calendar.json
 ```
 
-后续拉取、检查、生成和发布也需通过 `--config data/calendar.json` 使用这份配置。`setup` 不会覆盖已有的不同配置，也不能创建尚未收录的学期；新学期需要先按官方资料补充或调整校历。
+后续拉取、检查、生成和发布也需通过 `--config data/calendar.json` 使用这份配置。`setup` 不会覆盖已有的不同配置，也不能创建离线预设未收录的学期。官网已公布的新学期可使用下面的手动拉取命令；也可以按官方资料手工编辑配置。
+
+### 手动拉取官方校历
+
+```sh
+# 预览当前配置对应学期的字段变化，不写校历或备份
+npm run calendar:pull -- --dry-run
+# 备份后更新默认配置
+npm run calendar:pull -- --overwrite
+# 明确切换到官网已公布的学期
+npm run calendar:pull -- --semester 2026-2027-2 --overwrite
+# 另存为独立配置
+npm run calendar:pull -- --semester 2026-2027-2 --output data/calendar.json
+```
+
+`--output` 默认为 `config/calendar.json`。学期选择依次使用 `--semester`、目标文件中的学期、北京时间当前日期；只有目标不存在时才按日期选择。当前日期必须落在官网某学期上课日至考试结束日内，否则需要显式指定学期。不猜测尚未公布的学年，不回退到离线预设。
+
+命令只获取[北大官方校历网页](https://www.pku.edu.cn/detail/3377.html)中的校本部春秋学期，不需要登录，也不读取 `.env`。教学周按上课日至考试开始前的完整周计算；日期无法明确对应完整教学周、停补课表述无法解析或出现矛盾时停止保存。“公休，课程照常进行”不记为停课或补课；补课必须明确实际日期和原教学日期，例如“10月11日补10月1日课”，不能仅凭“补周一的课”推断。
+
+官方写明“另行通知”时，保存已公布内容并在终端列出待核对事项；这些提醒不写入配置，需自行记下并在安排公布后重新拉取或手工补充。校历不包含学院临时通知，也不自动应用社会调休安排。
+
+已有配置必须用 `--overwrite` 才会替换；只保留 `namespace` 和 `timetable`，其余校历字段整体重建，包括拉取有效期。**手工停补课修订不会合并，需要重新补充**。新文件默认使用 `pku-main-calendar` 命名空间和 `pku-ss` 作息；可以保存后自行编辑。仍需在选课系统中确认当前学期，网页学期和日期窗口不能代替此检查。
+
+覆盖前将原文件按字节备份到 `data/backups/`；配置损坏、抓取或校验失败、备份失败、拉取期间文件发生变化时保留原文件。不要在拉取期间编辑目标配置。`--dry-run` 不需要 `--overwrite`，不创建配置、备份、目录或锁，仅显示差异和提醒。校历更新不会修改课程 YAML，切换学期后须使用同学期课表；本地修改需重新生成、发布才会影响订阅。
+
+### 作息与停补课规则
 
 `timetable` 可选 `pku-main`（校本部）或 `pku-ss`（软件与微电子学院）。一份课表统一使用一套作息，切换只改变节次对应的时间，不改变学期日期、停补课安排。完整时间表和软微第 8 节的调整见 [README](../README.md#2-确认学期与作息时间)。
 

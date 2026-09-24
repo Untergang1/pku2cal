@@ -17,6 +17,8 @@ npm run worker:check
 
 上述测试覆盖课表文档与生成入口；修改其他部分时选择对应测试。小范围、低风险变更优先审阅 diff，文档变更检查内容与链接即可。需要测试时只运行直接相关的最小范围，通过后无需扩大验证。
 
+校历导入的针对性测试使用 `npm test -- tests/unit/academic-calendar.test.ts tests/integration/calendar-pull.test.ts`，不访问官网。需要人工核查当前官方页面时，运行 `npm run calendar:pull -- --dry-run`；可加 `--semester` 核查其他已公布学期，预览不保存校历或备份。
+
 CI 在 macOS 和 Linux 上使用相同的 `npm ci`、`npm run check` 和 `npm run worker:check` 命令。`check` 包含类型检查、构建与完整测试；`worker:check` 使用合成数据检查两种 Worker 构建配置，运行 Wrangler dry-run，不发布服务。自动测试和这些 dry-run 不依赖真实北大凭据。
 
 实现与验收情况见[验证边界](verification.md)。自动测试通过不等于真实发布或日历客户端显示已经验收。
@@ -37,7 +39,7 @@ Worker 使用构建时生成的日历快照，不会因为收到订阅请求而�
 
 正常完成或报错时，命令会自动清理临时文件和锁。如果进程被强制终止，先确认没有相关命令仍在运行，再清理对应 `.lock` 目录或 Worker `.run-*` 私密临时目录。后者可能包含临时快照、Secrets 和 Wrangler 日志，不要公开上传排障。
 
-`data/backups/` 中的课表备份不会自动删除，可在确认不再需要后自行清理。保留正在使用的课表、ICS、部署配置及 `data/pages/`、`data/worker/` 中的令牌状态；恢复方式见[进阶使用](advanced.md)。
+`data/backups/` 中的课表和校历备份不会自动删除，可在确认不再需要后自行清理。保留正在使用的课表、ICS、部署配置及 `data/pages/`、`data/worker/` 中的令牌状态；恢复方式见[进阶使用](advanced.md)。
 
 `npm run build` 会先清理 `dist` 子目录中已无对应源码的编译产物，保留有效输出和根目录 Worker bundle。在没有运行中任务时，可以删除 `.cache/` 与依赖中的测试缓存。
 
