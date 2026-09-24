@@ -3,6 +3,7 @@ import { ParseError } from '../pku/parser.js';
 import { ScheduleError } from '../schedule/time.js';
 import { CalendarError } from '../calendar/ics.js';
 import { ConfigError } from './config.js';
+import { SemesterWindowError } from './semester.js';
 
 export interface LogRecord { stage: 'generate' | 'cache' | 'configuration'; category: string; durationMs: number }
 export type Logger = (record: LogRecord) => void;
@@ -14,5 +15,6 @@ export function errorCategory(error: unknown): string {
   if (error instanceof ScheduleError) return `schedule:${error.code}`;
   if (error instanceof CalendarError) return 'calendar:invalid';
   if (error instanceof ConfigError) return 'configuration:invalid';
+  if (error instanceof SemesterWindowError) return `semester:${error.code}`;
   return 'internal';
 }

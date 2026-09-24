@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { validateConfig } from '../application/config.js';
+import { configWithPrivateConfirmations, validateConfig, type CalendarConfig } from '../application/config.js';
+import { assertGenerationAllowed } from '../application/semester.js';
 import { generateCalendar, type GeneratedCalendar } from '../application/generate.js';
 import { errorCategory, logRecord, type Logger } from '../application/log.js';
 import type { Fetch } from '../pku/http.js';
@@ -12,6 +13,7 @@ export interface WorkerEnv {
   PKU_USERNAME?: string;
   PKU_PASSWORD?: string;
   CALENDAR_TOKEN?: string;
+  PKU_UNSCHEDULED_COURSES?: string;
   CALENDAR_KV: CalendarStore;
 }
 interface Snapshot extends GeneratedCalendar { fingerprint: string }
@@ -59,17 +61,32 @@ export function createWorker(config: unknown, dependencies: {
       if (request.method !== 'GET') return new Response('Method not allowed', { status: 405, headers: { allow: 'GET', 'cache-control': 'no-store' } });
       const started = now().getTime();
       let identity: ReturnType<typeof cacheIdentity>;
+      let valid: CalendarConfig;
       try {
         if (!env.PKU_USERNAME?.trim() || !env.PKU_PASSWORD || !env.CALENDAR_KV) throw new Error();
-        identity = cacheIdentity(config, env.PKU_USERNAME);
+        valid = configWithPrivateConfirmations(config, env.PKU_UNSCHEDULED_COURSES);
+        identity = cacheIdentity(valid, env.PKU_USERNAME);
       } catch {
         logger({ stage: 'configuration', category: 'invalid', durationMs: 0 });
         return unavailable();
       }
       const { key, fingerprint } = identity;
       let cached: Snapshot | null = null;
-      try { cached = readSnapshot(await env.CALENDAR_KV.get(key), fingerprint, started); }
+      try {
+        cached = readSnapshot(await env.CALENDAR_KV.get(key), fingerprint, started);
+        if (cached) {
+          try { assertGenerationAllowed(valid, new Date(cached.generatedAt)); }
+          catch { cached = null; }
+        }
+      }
       catch { logger({ stage: 'cache', category: 'read_failed', durationMs: now().getTime() - started }); }
+      // The binding limits generation, not retention of a previously valid snapshot.
+      // Check even a young snapshot: freshness must not extend the generation window.
+      try { assertGenerationAllowed(valid, now()); }
+      catch (error) {
+        logger({ stage: 'generate', category: errorCategory(error), durationMs: now().getTime() - started });
+        return cached ? respond(cached, 'stale') : unavailable();
+      }
       if (cached && started - Date.parse(cached.generatedAt) < REFRESH_MS) return respond(cached, 'fresh');
       // Keep persistence identity independent of secrets, but do not join an old-password refresh.
       const flightKey = `${key}:${digest(env.PKU_PASSWORD)}`;
@@ -77,7 +94,8 @@ export function createWorker(config: unknown, dependencies: {
         let refresh = pending.get(flightKey);
         if (!refresh) {
           refresh = (async () => {
-            const result = await generate(config, { username: env.PKU_USERNAME!, password: env.PKU_PASSWORD! }, { fetch: dependencies.fetch ?? fetch, now });
+            const result = await generate(valid, { username: env.PKU_USERNAME!, password: env.PKU_PASSWORD! }, { fetch: dependencies.fetch ?? fetch, now });
+            assertGenerationAllowed(valid, now());
             const snapshot: Snapshot = { ...result, fingerprint };
             await env.CALENDAR_KV.put(key, JSON.stringify(snapshot));
             logger({ stage: 'generate', category: 'success', durationMs: now().getTime() - started });

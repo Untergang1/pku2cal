@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { RawCourse } from '../pku/parser.js';
 import { addDays, parseTime, ScheduleError } from './time.js';
+import { isConfirmedUnscheduled, type UnscheduledCourseConfirmation } from './unscheduled.js';
 
 export interface ScheduleConfig {
   namespace: string;
@@ -10,6 +11,7 @@ export interface ScheduleConfig {
   periods: { period: number; start: string; end: string }[];
   holidays: string[];
   makeups: Record<string, string>;
+  unscheduledCourses?: UnscheduledCourseConfirmation[] | undefined;
 }
 export interface CalendarEvent {
   uid: string;
@@ -30,6 +32,7 @@ export function expandCourses(courses: RawCourse[], config: ScheduleConfig): Cal
   const identities = new Set<string>();
   for (const course of courses) {
     if (!course.courseId || !course.classId || !course.name || !course.segments.length) throw new ScheduleError('time');
+    if (isConfirmedUnscheduled(course, config.unscheduledCourses ?? [])) continue;
     for (const segment of course.segments) {
       const slot = parseTime(segment, config.teachingWeeks);
       for (let p = slot.startPeriod; p <= slot.endPeriod; p++) if (!periods.has(p)) throw new ScheduleError('periods');

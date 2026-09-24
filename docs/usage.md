@@ -33,11 +33,13 @@ npm run probe:worker
 | --- | --- |
 | `namespace` | 自行选定并长期保持不变的日历命名空间；更改会改变所有 UID |
 | `semester` | 学期标识，例如 `2026-2027-1` |
+| `semesterBinding` | 人工确认的学期及允许生成的日期范围，见下文 |
 | `firstMonday` | 第 1 教学周周一，`YYYY-MM-DD` |
 | `teachingWeeks` | 教学周数，单双周按此编号判断 |
 | `periods` | `{ "period": 1, "start": "08:00", "end": "08:50" }` 等节次表，时间为上海当地时间 |
 | `holidays` | 整日停课日期数组 |
 | `makeups` | `"目标日期": "原教学日期"` 映射 |
+| `unscheduledCourses` | 可选的无固定时间课程确认列表，含个人选课信息，限私密配置使用 |
 
 补课从标准课表取原日课程，替换目标日课程，原日不再保留；原日可同时列入停课日期。源、目标不得重叠，目标不得停课，同一源不能补到多个目标。两个入口消费相同配置结构。
 
@@ -47,12 +49,57 @@ npm run generate -- --config data/calendar.json --output data/calendar.ics
 
 仅在完整生成成功后替换旧文件。配置错误、上游失败、未知选课状态或无法识别时间均返回非零退出码。只支持“已选上”课程，排除“未选上”；其他状态拒绝生成。页面必须为完整单页结果，检测到多页时拒绝发布残缺结果。
 
-**当前真实联调限制：**已测页面没有学期编号，且有已选上课程未提供可解析的上课时间。当前严格拒绝生成，尚不能将该账号作为端到端日历验收通过。不能通过删除失败检查或静默忽略课程绕过；详见 [验证记录](verification.md)。
+### 人工绑定学期
+
+上游页面没有学期编号时，必须先由账号使用者确认当前选课学期，再在配置中加入 `semesterBinding`。示例结构如下；示例日期不代表账号已经确认，需改成实际允许生成的范围：
+
+```json
+{
+  "semesterBinding": {
+    "confirmedSemester": "2026-2027-1",
+    "validFrom": "2026-09-07",
+    "validThrough": "2027-01-10"
+  }
+}
+```
+
+`confirmedSemester` 必须与顶层 `semester` 一致；修改学期需重新确认。起止日期都按 `Asia/Shanghai` 解释，包含首日和末日完整一天，与教学周范围分开配置。程序在请求上游前及生成完成时检查有效期；到期或尚未开始时不登录、不生成。Node 在替换文件前再次检查。若上游明确给出另一个学期，即使有人工绑定也报错。没有绑定时，仍要求上游给出匹配的学期标识。
+
+有效期外，Worker 不刷新、不替换 KV；仍可提供同配置下在有效期内生成的旧副本，标记为 `stale` 并保留 `Last-Modified`，无副本返回 `503`。静态入口失败保留已有文件和 Pages 部署。学期绑定或有效期变更会改变配置指纹，不能读取原配置的缓存。
+
+### 确认无固定时间课程
+
+程序不会自动把无法解析的时间当作无固定时间。只有人工核对课程安排后，才能用课程号、班号和当时完整的分段说明明确标记：
+
+```json
+[
+  {
+    "semester": "2026-2027-1",
+    "courseId": "SYN002",
+    "classId": "01",
+    "confirmed": true,
+    "expectedSegments": ["(合成无固定时间说明)"]
+  }
+]
+```
+
+这些值都是合成示例，不能直接用于真实账号。列表项的学期必须匹配当前配置，`confirmed` 必须为 `true`；时间说明必须与解析后的分段文本逐项一致。如果说明改变，或课程包含可解析的固定时段，会报错要求复核。未确认的其他课程仍严格解析；退选后不再出现的确认项不会阻碍生成。确认仅影响是否生成事件，不改变其他课程 UID。
+
+列表含个人选课信息，不得提交。提供方式任选一种：
+
+- 本地：在忽略的 `data/calendar.json` 中加入 `unscheduledCourses` 数组；或在 `.env` 的 `PKU_UNSCHEDULED_COURSES` 中放置该数组的 JSON 字符串。
+- Actions：将数组 JSON 保存为 `PKU_UNSCHEDULED_COURSES` Secret，workflow 已接入；不在可提交的校历文件中加入个人列表。
+- Worker：通过 `npx wrangler secret put PKU_UNSCHEDULED_COURSES` 配置运行时 Secret；本地开发在 `.dev.vars` 中设置。Worker 构建拒绝打包包含非空个人列表的校历。
+
+本地 `.env` 写法为 `PKU_UNSCHEDULED_COURSES='[{"semester":"...",...}]'`，外层单引号用于包住完整 JSON。未设置或留空表示没有确认项。配置和 Secret 同时提供列表时会报错，避免静默覆盖。确认列表加入有效配置指纹，因此修改确认项会隔离旧缓存。
+
+**当前真实联调状态：**机制已实现；账号实际学期、允许生成的起止日期及具体课程确认尚待用户完成，不能将该账号标记为端到端验收通过。待确认清单仅保存在忽略的 `data/`，默认 `confirmed: false`；详见 [验证记录](verification.md)。
 
 ## GitHub Actions 与 Pages
 
 1. 将核实后的非私密校历保存为 `config/calendar.json` 并提交。勿提交 `.env`、原始页面和 ICS。
 2. 在仓库 Actions Secrets 设置 `PKU_USERNAME`、`PKU_PASSWORD`。
+   如有已确认无固定时间课程，再设置 `PKU_UNSCHEDULED_COURSES` Secret。
 3. 将 Pages 的发布来源设为 GitHub Actions。
 4. 确认课表可以公开访问后，设置仓库变量 `PUBLISH_CALENDAR=true`，手动运行 Generate calendar and publish Pages。
 5. 订阅 Pages 地址下的 `calendar.ics`；此地址公开可访问。
@@ -95,7 +142,9 @@ KV 不持久化登录会话，仅保存最近成功的 ICS、生成时间和配�
 | `pku:network` / `pku:response` / `pku:redirect` | 网络、上游维护或重定向变化；用私密探测命令复现 |
 | `parse:structure` / `parse:status` / `parse:pagination` | 页面结构、状态或分页不符合已核实契约 |
 | `parse:semester` | 学期缺失或与配置不符 |
+| `semester:not_started` / `semester:expired` | 尚未进入或已经离开人工绑定的允许生成日期范围 |
 | `schedule:time` / `schedule:weeks` / `schedule:periods` | 上课时间无法识别、周数越界或节次配置不足 |
+| `schedule:unscheduled_changed` / `schedule:unscheduled_has_time` | 已确认课程的说明改变或含固定时段，需要重新核对，不能继续忽略 |
 | `configuration:invalid` | 校历字段、日期或停补课冲突 |
 | Worker `200` + `X-Calendar-Status: stale` | 刷新失败，仍提供旧版；`Last-Modified` 为旧版生成时间 |
 | Worker `503` | 配置不可用或刷新失败且同配置无可用副本 |

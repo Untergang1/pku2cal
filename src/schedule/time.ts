@@ -1,5 +1,5 @@
 export class ScheduleError extends Error {
-  constructor(public readonly code: 'time' | 'weeks' | 'periods' | 'duplicate' | 'date') {
+  constructor(public readonly code: 'time' | 'weeks' | 'periods' | 'duplicate' | 'date' | 'unscheduled_changed' | 'unscheduled_has_time') {
     super(`schedule:${code}`);
     this.name = 'ScheduleError';
   }

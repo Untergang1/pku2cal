@@ -24,6 +24,7 @@ jobs:
         env:
           PKU_USERNAME: ${{ secrets.PKU_USERNAME }}
           PKU_PASSWORD: ${{ secrets.PKU_PASSWORD }}
+          PKU_UNSCHEDULED_COURSES: ${{ secrets.PKU_UNSCHEDULED_COURSES }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
