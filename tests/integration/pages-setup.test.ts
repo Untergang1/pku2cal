@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { command, parseApiResponse, repositoryFromOrigin, setupPages, type CommandResult, type PagesDependencies } from '../../src/entrypoints/pages-setup.js';
 
@@ -17,6 +18,7 @@ function fixture(options: {
   pages?: 'missing' | 'legacy' | 'workflow'; failPath?: string; failStatus?: number;
   dirty?: boolean; remoteSha?: string; changedSha?: boolean; conclusion?: string;
   unchanged?: boolean; remoteToken?: boolean; localToken?: string;
+  selectedTimetable?: 'pku-main' | 'pku-ss';
   skipped?: boolean; wait?: boolean; runSha?: string; dispatchId?: boolean; secretsFail?: boolean;
 } = {}) {
   const calls: { program: string; args: string[]; input: string | undefined }[] = [];
@@ -29,7 +31,11 @@ function fixture(options: {
   const d: PagesDependencies = {
     env: { PKU_USERNAME: 'synthetic-user', PKU_PASSWORD: 'synthetic-password' },
     read: async path => {
-      if (path === 'config/calendar.json') return JSON.stringify(config);
+      if (path === 'config/calendar.json') return JSON.stringify({ ...config, timetable: options.selectedTimetable ?? config.timetable });
+      for (const id of ['pku-main', 'pku-ss']) {
+        const file = new URL(`../../config/timetables/${id}.json`, import.meta.url);
+        if (path === fileURLToPath(file)) return id === 'pku-ss' ? JSON.stringify({ label: '合成软微草稿', periods: [] }) : readFile(file, 'utf8');
+      }
       if (saved.has(path)) return saved.get(path)!;
       throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     },
@@ -45,6 +51,7 @@ function fixture(options: {
           'remote get-url origin': 'git@github.com:calendar-owner/calendar.git',
           'remote get-url --push origin': 'git@github.com:calendar-owner/calendar.git',
           'rev-parse HEAD': sha,
+          'ls-files --error-unmatch config/timetables/pku-main.json': 'config/timetables/pku-main.json',
           'ls-files --error-unmatch config/calendar.json .github/workflows/pages.yml': 'config/calendar.json\n.github/workflows/pages.yml',
         };
         if (!(key in output)) throw new Error(`Unexpected git command: ${key}`);
@@ -138,10 +145,11 @@ it('requires a registered remote workflow before uploading anything', async () =
 
 it.each(['credentials', 'private-config', 'expired', 'unbound', 'confirmations'])('rejects invalid %s before mutation', async kind => {
   const f = fixture();
+  const read = f.d.read;
   if (kind === 'credentials') f.d.env = {};
-  if (kind === 'private-config') f.d.read = async () => JSON.stringify({ ...config, unscheduledCourses: [] });
+  if (kind === 'private-config') f.d.read = async path => path === 'config/calendar.json' ? JSON.stringify({ ...config, unscheduledCourses: [] }) : read(path);
   if (kind === 'expired') f.d.now = () => new Date('2027-01-11T00:00:00Z');
-  if (kind === 'unbound') f.d.read = async () => JSON.stringify({ ...config, semesterBinding: undefined });
+  if (kind === 'unbound') f.d.read = async path => path === 'config/calendar.json' ? JSON.stringify({ ...config, semesterBinding: undefined }) : read(path);
   if (kind === 'confirmations') f.d.confirmations = async () => 'invalid synthetic-private-json';
   await expect(setupPages(true, f.d)).rejects.toThrow('本地配置无效');
   expect(f.writes()).toEqual([]);
@@ -298,4 +306,11 @@ it('rejects Actions execution before exposing a local subscription URL', async (
   f.d.env.GITHUB_ACTIONS = 'true';
   await expect(setupPages(true, f.d)).rejects.toThrow('本机');
   expect(f.calls).toEqual([]);
+});
+
+
+it('rejects the unfilled SS table before uploading secrets or changing GitHub settings', async () => {
+  const f = fixture({ selectedTimetable: 'pku-ss' });
+  await expect(setupPages(true, f.d)).rejects.toThrow('config/timetables/pku-ss.json');
+  expect(f.calls.some(call => call.args.includes('--method') && call.args[call.args.indexOf('--method') + 1] !== 'GET')).toBe(false);
 });

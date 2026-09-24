@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { configWithPrivateConfirmations, validateConfig } from '../application/config.js';
+import { configWithPrivateConfirmations, TimetableConfigError } from '../application/config.js';
 import { assertGenerationAllowed } from '../application/semester.js';
+import { resolveCalendarConfig } from './calendar-config.js';
 import { readPrivateConfirmations } from './node.js';
 import { newPagesToken, savePagesState, subscriptionUrl, validatePagesToken } from './pages-state.js';
 
@@ -110,7 +111,8 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
 
   let secrets: Record<string, string>;
   try {
-    const config = validateConfig(JSON.parse(await d.read('config/calendar.json')));
+    const { config, source } = await resolveCalendarConfig(JSON.parse(await d.read('config/calendar.json')), file => d.read(fileURLToPath(file)));
+    await checked('git', ['ls-files', '--error-unmatch', `config/timetables/${source.timetable}.json`], '请先提交并推送所选时间表文件。');
     // Even an empty property is rejected to keep the public/private boundary explicit.
     if (config.unscheduledCourses !== undefined || !config.semesterBinding) throw new Error();
     assertGenerationAllowed(config, d.now());
@@ -120,7 +122,9 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
     if (!username?.trim() || !password?.trim()) throw new Error();
     secrets = { PKU_USERNAME: username, PKU_PASSWORD: password,
       PKU_UNSCHEDULED_COURSES: JSON.stringify(effective.unscheduledCourses ?? []) };
-  } catch {
+  } catch (error) {
+    if (error instanceof TimetableConfigError) throw new PagesSetupError(error.guidance);
+    if (error instanceof PagesSetupError) throw error;
     throw new PagesSetupError('本地配置无效：检查 .env 中的账号密码、私密确认列表，以及公共校历的学期绑定和有效期；公共校历不得包含 unscheduledCourses。');
   }
   await api('/actions/workflows/pages.yml');

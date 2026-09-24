@@ -5,7 +5,7 @@ const date = z.string().refine(value => { try { dateEpoch(value); return true; }
 const text = z.string().trim().min(1);
 const clock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 const semester = z.string().regex(/^20\d{2}-20\d{2}-[123]$/);
-const schema = z.strictObject({
+const calendarFields = z.strictObject({
   namespace: text,
   semester,
   semesterBinding: z.strictObject({
@@ -22,21 +22,61 @@ const schema = z.strictObject({
   })).optional(),
   firstMonday: date,
   teachingWeeks: z.number().int().min(1).max(53),
-  periods: z.array(z.strictObject({ period: z.number().int().min(1).max(30), start: clock, end: clock })).min(1),
   holidays: z.array(date),
   makeups: z.record(date, date),
 });
+const periods = z.array(z.strictObject({ period: z.number().int().min(1).max(30), start: clock, end: clock })).min(1);
+// Keep canonical field order stable: Worker fingerprints include serialized config.
+const schema = calendarFields.omit({ holidays: true, makeups: true }).extend({
+  periods, holidays: calendarFields.shape.holidays, makeups: calendarFields.shape.makeups,
+});
+const timetableId = z.enum(['pku-main', 'pku-ss']);
+const sourceSchema = calendarFields.extend({ timetable: timetableId });
+const timetableSchema = z.strictObject({ label: text, periods });
 export type CalendarConfig = z.infer<typeof schema>;
+export type CalendarSourceConfig = z.infer<typeof sourceSchema>;
+export type TimetableId = z.infer<typeof timetableId>;
+export type SemesterConfig = Pick<CalendarConfig, 'semester' | 'semesterBinding'>;
 
 export class ConfigError extends Error {
   constructor() { super('configuration:invalid'); this.name = 'ConfigError'; }
 }
 
-/** Returns a canonical configuration, also used as the cache fingerprint input. */
+/** Safe, actionable messages contain only fixed paths, never file contents. */
+export class TimetableConfigError extends ConfigError {
+  constructor(public readonly guidance: string) { super(); this.name = 'TimetableConfigError'; }
+}
+
+export function validateSourceConfig(input: unknown): CalendarSourceConfig {
+  const result = sourceSchema.safeParse(input);
+  if (!result.success) throw new TimetableConfigError('校历须使用 timetable: "pku-main" 或 "pku-ss" 选择时间表，不再支持内联 periods；请检查其余校历字段。');
+  return canonicalCalendarFields(result.data);
+}
+
+export function validateTimetable(input: unknown): z.infer<typeof timetableSchema> {
+  const result = timetableSchema.safeParse(input);
+  if (!result.success) throw new ConfigError();
+  validatePeriods(result.data.periods);
+  return result.data;
+}
+
+function validatePeriods(value: CalendarConfig['periods']): void {
+  value.sort((a, b) => a.period - b.period);
+  for (let i = 0; i < value.length; i++) {
+    const p = value[i]!;
+    if (p.start >= p.end || (i > 0 && (value[i - 1]!.period === p.period || value[i - 1]!.end > p.start))) throw new ConfigError();
+  }
+}
+
+/** Returns a canonical resolved configuration, also used as the cache fingerprint input. */
 export function validateConfig(input: unknown): CalendarConfig {
   const result = schema.safeParse(input);
   if (!result.success) throw new ConfigError();
-  const c = result.data;
+  validatePeriods(result.data.periods);
+  return canonicalCalendarFields(result.data);
+}
+
+function canonicalCalendarFields<T extends z.infer<typeof calendarFields>>(c: T): T {
   if (new Date(dateEpoch(c.firstMonday)).getUTCDay() !== 1) throw new ConfigError();
   const [year, next] = c.semester.split('-').map(Number);
   if (next !== year! + 1) throw new ConfigError();
@@ -45,11 +85,6 @@ export function validateConfig(input: unknown): CalendarConfig {
     const identities = c.unscheduledCourses.map(course => JSON.stringify([course.courseId, course.classId]));
     if (new Set(identities).size !== identities.length || c.unscheduledCourses.some(course => course.semester !== c.semester)) throw new ConfigError();
     c.unscheduledCourses.sort((a, b) => a.courseId.localeCompare(b.courseId) || a.classId.localeCompare(b.classId));
-  }
-  c.periods.sort((a, b) => a.period - b.period);
-  for (let i = 0; i < c.periods.length; i++) {
-    const p = c.periods[i]!;
-    if (p.start >= p.end || (i > 0 && (c.periods[i - 1]!.period === p.period || c.periods[i - 1]!.end > p.start))) throw new ConfigError();
   }
   if (new Set(c.holidays).size !== c.holidays.length) throw new ConfigError();
   c.holidays.sort();

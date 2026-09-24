@@ -1,4 +1,4 @@
-import { validateConfig, type CalendarConfig } from './config.js';
+import { validateSourceConfig, type CalendarSourceConfig, type SemesterConfig } from './config.js';
 import { assertGenerationAllowed, SemesterWindowError } from './semester.js';
 
 export interface SemesterPreset {
@@ -18,15 +18,15 @@ export class SetupError extends Error {
 export interface SemesterSelection {
   label: string;
   source: string;
-  config: CalendarConfig;
+  config: CalendarSourceConfig;
 }
 
 /** Uses curated calendar dates; no month-based guess or upstream login is needed. */
 export function selectSemester(presets: SemesterPreset[], now: Date, semester?: string): SemesterSelection {
   if (!Number.isFinite(now.getTime())) throw new SemesterWindowError('invalid_clock');
   const selections = presets.map(preset => {
-    const calendar = validateConfig(preset.calendar);
-    const config = validateConfig({ ...calendar, semesterBinding: {
+    const calendar = validateSourceConfig(preset.calendar);
+    const config = validateSourceConfig({ ...calendar, semesterBinding: {
       confirmedSemester: calendar.semester,
       validFrom: calendar.firstMonday,
       validThrough: preset.validThrough,
@@ -43,7 +43,7 @@ export function selectSemester(presets: SemesterPreset[], now: Date, semester?: 
   return matches[0]!;
 }
 
-export function semesterStatus(config: CalendarConfig, now: Date): string[] {
+export function semesterStatus(config: SemesterConfig, now: Date): string[] {
   let state = '可以生成';
   try { assertGenerationAllowed(config, now); }
   catch (error) {

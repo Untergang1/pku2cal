@@ -66,9 +66,13 @@ docs/            # 系统设计、参考资料及验证记录
 - UID 使用稳定日历命名空间、学期、课程号、班号、原教学日期和原时段身份计算摘要；不使用生成时间、标题、教师、地点或数组顺序。补课沿用原事件身份；新增与取消课程通过完整订阅快照反映。
 - 校验必填字段、时间范围、文本转义、CRLF 与 UTF-8 折行。配置或解析异常使整次生成失败，不发布残缺日历。
 
-实现约定：配置使用 JSON，`namespace`、`semester`、`firstMonday`、`teachingWeeks`、`periods`、`holidays`、`makeups` 为必填项。日期限 2000–2099 年，按上海时间计算后以 UTC `DTSTART` / `DTEND` 写入 ICS；折行限制为每行 75 个 UTF-8 字节（含续行空格）。`config/calendar.example.json` 是合成示例，不能作为官方校历。原时段身份由星期和起止节次组成；同课程、同原教学日、同节次的重复时段会报错。课程描述、地点及教学周文本排列均不参与摘要。
+实现约定：配置使用 JSON，`namespace`、`semester`、`firstMonday`、`teachingWeeks`、`timetable`、`holidays`、`makeups` 为用户配置必填项；不接受内联 `periods`。日期限 2000–2099 年，按上海时间计算后以 UTC `DTSTART` / `DTEND` 写入 ICS；折行限制为每行 75 个 UTF-8 字节（含续行空格）。`config/calendar.example.json` 是合成示例，不能作为官方校历。原时段身份由星期和起止节次组成；同课程、同原教学日、同节次的重复时段会报错。课程描述、地点及教学周文本排列均不参与摘要。
 
 页面缺少学期标识时，使用显式 `semesterBinding`：`confirmedSemester` 必须等于顶层学期，`validFrom`、`validThrough` 是包含首尾两天的上海日期范围。仅在范围内允许生成；请求上游前和获取完成后均检查，Node 写入替换前及 Worker 写入 KV 前再检查。该范围限制生成时机，不裁剪课程事件日期。上游存在矛盾学期标识时拒绝生成；没有人工绑定时仍要求上游标识匹配。
+
+用户配置 `CalendarSourceConfig` 通过 `timetable` 选择 `pku-main` 或 `pku-ss`，对应 `config/timetables/` 中的独立 JSON 文件。时间表包含 `label` 和 `periods`，与学期分离；软微初始为空，待用户按实际作息填写。`entrypoints/calendar-config` 使用相对于项目自身的固定 URL 映射，只读取所选表，统一用于 Node、状态检查、初始化、Pages 预检查与生成、Worker 构建。无效标识、文件缺失或所选表为空均拒绝，不回退；未选中表不会影响运行。校验覆盖节次范围、时刻格式、重复与重叠，课程引用缺失节次在展开时拒绝。
+
+加载器将来源配置转换为仅含实际 `periods` 的 `CalendarConfig`，之后注入私密确认项。日历核心和 Worker 运行时只接收解析后的配置，不读取文件。Worker 构建嵌入解析结果，表内容变更需重新部署；Pages 在下一次生成时读取仓库中的表。时间表名称与标识不进入配置指纹；保留规范化字段顺序，使本部配置迁移后指纹保持一致。实际时间内容变化隔离缓存，但不改变基于节次身份的 UID。一份日历统一采用一套作息，选择不改变学期日期或假期。
 
 `application/setup` 按北京时间从经过整理的官方校历中选择唯一有效学期，也支持显式学期参数；不按月份猜测或在定时生成时切换学期。`config/semesters.json` 记录学期、显示名称、校历文件、有效期末日和官方来源；初日取首周周一，末日取校历确定的学期结束日，教学周数独立配置。初始化写入显式绑定，保留已有不同配置及命名空间；系统日期匹配不替代用户对选课系统学期的确认。
 
@@ -100,7 +104,7 @@ KV 保存最近成功的 ICS、生成时间和配置指纹，按账号、学期�
 
 成功响应使用 `text/calendar; charset=utf-8`；日历客户端自行决定订阅刷新时间。凭据仅来自 Actions Secrets、Worker Secrets 或未跟踪的本地配置。日志只记录阶段、错误类别和耗时，不记录凭据、会话、原始页面、课表或完整订阅地址（本机初始化成功结果会显示私密订阅地址）。
 
-入口接口：`npm run setup` 初始化校历，`npm run status` 仅显示日期状态；`npm run generate` 默认读取 `config/calendar.json`，输出 `data/calendar.ics`，可用 `--config <json> --output <ics>` 覆盖。成功后同目录临时文件原子替换。Worker 使用 `CALENDAR_KV` 绑定和 `PKU_USERNAME`、`PKU_PASSWORD`、`CALENDAR_TOKEN` Secrets。Wrangler 的 custom build 从 `PKU_CONFIG_PATH`（默认 `config/calendar.json`）读取并校验配置，打包进 Worker；不将 Secrets 打包。`npm run worker:check` 使用合成示例完成不发布的构建检查。
+入口接口：`npm run setup` 初始化校历，`npm run status` 校验所选时间表并显示其名称和日期状态；`npm run generate` 默认读取 `config/calendar.json`，输出 `data/calendar.ics`，可用 `--config <json> --output <ics>` 覆盖。成功后同目录临时文件原子替换。Worker 使用 `CALENDAR_KV` 绑定和 `PKU_USERNAME`、`PKU_PASSWORD`、`CALENDAR_TOKEN` Secrets。Wrangler 的 custom build 从 `PKU_CONFIG_PATH`（默认 `config/calendar.json`）读取并校验配置，打包进 Worker；不将 Secrets 打包。`npm run worker:check` 使用合成示例完成不发布的构建检查。
 
 Worker 成功响应使用 `Last-Modified` 表示快照生成时间、`X-Calendar-Status: fresh|stale` 标示缓存状态，设置 `Cache-Control: private, no-store`，防止令牌轮换后中间缓存继续提供日历。KV 写入失败也保留旧版；配置错误与无可用副本返回 `503`。Pages workflow 通过仓库变量 `PUBLISH_CALENDAR=true` 显式启用，生成和上传成功后才执行部署。
 

@@ -1,4 +1,4 @@
-import type { CalendarConfig } from './config.js';
+import type { SemesterConfig } from './config.js';
 import { ParseError } from '../pku/parser.js';
 
 export class SemesterWindowError extends Error {
@@ -9,7 +9,7 @@ export class SemesterWindowError extends Error {
 }
 
 /** Date bounds are inclusive Shanghai calendar dates, independent of host TZ. */
-export function assertGenerationAllowed(config: CalendarConfig, now: Date): void {
+export function assertGenerationAllowed(config: SemesterConfig, now: Date): void {
   const timestamp = now.getTime();
   if (!Number.isFinite(timestamp)) throw new SemesterWindowError('invalid_clock');
   const binding = config.semesterBinding;
@@ -20,7 +20,7 @@ export function assertGenerationAllowed(config: CalendarConfig, now: Date): void
   if (timestamp >= endExclusive) throw new SemesterWindowError('expired');
 }
 
-export function assertSemesterMatches(config: CalendarConfig, upstreamSemester: string | null): void {
+export function assertSemesterMatches(config: SemesterConfig, upstreamSemester: string | null): void {
   // A manual binding authorizes missing evidence, never contradictory evidence.
   if (upstreamSemester !== null ? upstreamSemester !== config.semester : !config.semesterBinding) throw new ParseError('semester');
 }

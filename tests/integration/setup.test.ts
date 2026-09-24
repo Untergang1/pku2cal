@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, expect, it } from 'vitest';
 import { selectSemester, semesterStatus } from '../../src/application/setup.js';
 import { initializeCalendar, loadPresets } from '../../src/entrypoints/setup.js';
+import { resolveCalendarConfig } from '../../src/entrypoints/calendar-config.js';
 import { assertGenerationAllowed } from '../../src/application/semester.js';
 import { readPrivateConfirmations } from '../../src/entrypoints/node.js';
 
@@ -16,7 +17,9 @@ it('initializes the confirmed autumn semester from the official calendar', async
   const automatic = selectSemester(presets, now);
   expect(automatic).toEqual(selectSemester(presets, now, '2026-2027-1'));
   expect(automatic.config.semesterBinding).toEqual({ confirmedSemester: '2026-2027-1', validFrom: '2026-09-07', validThrough: '2027-01-10' });
-  expect(automatic.config.periods).toHaveLength(12);
+  expect(automatic.config.timetable).toBe('pku-main');
+  expect(automatic.config).not.toHaveProperty('periods');
+  expect((await resolveCalendarConfig(automatic.config)).config.periods).toHaveLength(12);
   expect(automatic.config.teachingWeeks).toBe(16);
   expect(automatic.config.unscheduledCourses).toBeUndefined();
   expect(() => assertGenerationAllowed(automatic.config, now)).not.toThrow();
@@ -50,6 +53,10 @@ it('preserves configuration and namespace when setup is rerun', async () => {
   const original = await readFile(path, 'utf8');
   await expect(initializeCalendar(path, { ...selection.config, namespace: 'changed-namespace' })).rejects.toThrow('setup:exists');
   expect(await readFile(path, 'utf8')).toBe(original);
+  const custom = JSON.stringify({ ...selection.config, timetable: 'pku-ss' });
+  await writeFile(path, custom);
+  await expect(initializeCalendar(path, selection.config)).rejects.toThrow('setup:exists');
+  expect(await readFile(path, 'utf8')).toBe(custom);
   await writeFile(path, 'private invalid draft');
   await expect(initializeCalendar(path, selection.config)).rejects.toThrow('setup:exists');
   expect(await readFile(path, 'utf8')).toBe('private invalid draft');

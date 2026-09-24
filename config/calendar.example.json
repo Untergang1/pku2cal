@@ -3,12 +3,7 @@
   "semester": "2026-2027-1",
   "firstMonday": "2026-09-07",
   "teachingWeeks": 16,
-  "periods": [
-    { "period": 1, "start": "08:00", "end": "08:50" },
-    { "period": 2, "start": "09:00", "end": "09:50" },
-    { "period": 3, "start": "10:10", "end": "11:00" },
-    { "period": 4, "start": "11:10", "end": "12:00" }
-  ],
   "holidays": [],
-  "makeups": {}
+  "makeups": {},
+  "timetable": "pku-main"
 }

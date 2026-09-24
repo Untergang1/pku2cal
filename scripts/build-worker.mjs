@@ -1,11 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { build } from 'esbuild';
-import { validateConfig } from '../dist/application/config.js';
+import { TimetableConfigError } from '../dist/application/config.js';
+import { resolveCalendarConfig } from '../dist/entrypoints/calendar-config.js';
 
 try {
   const path = resolve(process.env.PKU_CONFIG_PATH || 'config/calendar.json');
-  const config = validateConfig(JSON.parse(await readFile(path, 'utf8')));
+  const { config } = await resolveCalendarConfig(JSON.parse(await readFile(path, 'utf8')));
   if (config.unscheduledCourses?.length) throw new Error('Use a runtime Secret for private course confirmations');
   await build({
     entryPoints: ['src/entrypoints/worker-deploy.ts'], outfile: 'dist/worker.mjs', bundle: true,
@@ -13,7 +14,8 @@ try {
     conditions: ['workerd', 'browser'], external: ['node:*'],
     define: { __CALENDAR_CONFIG__: JSON.stringify(config) },
   });
-} catch {
+} catch (error) {
+  if (error instanceof TimetableConfigError) console.error(error.guidance);
   console.error('worker-build:invalid (use a valid public calendar JSON; private course confirmations belong in PKU_UNSCHEDULED_COURSES)');
   process.exitCode = 1;
 }

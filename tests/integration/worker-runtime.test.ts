@@ -3,21 +3,26 @@ import { expect, it } from 'vitest';
 import { workerRuntime } from './runtime.js';
 import { config, timetable } from '../fixtures/timetable.js';
 import { generateFromHtml } from '../../src/application/generate.js';
+import { resolveCalendarConfig } from '../../src/entrypoints/calendar-config.js';
 import { cacheIdentity } from '../../src/entrypoints/worker.js';
 import type { CalendarStore } from '../../src/entrypoints/worker.js';
 import { configWithPrivateConfirmations } from '../../src/application/config.js';
 
-it('starts the production deployment entry and serves its configured KV snapshot', async () => {
+it.each(['pku-main', 'pku-ss'])('starts the production deployment entry with resolved %s and serves its configured KV snapshot', async id => {
+  const { periods, ...source } = config;
+  const selected = (await resolveCalendarConfig({ ...source, timetable: id }, async () => JSON.stringify({
+    label: '合成测试作息', periods: periods.map(p => id === 'pku-ss' && p.period === 1 ? { ...p, start: '08:05' } : p),
+  }))).config;
   const token = 't'.repeat(43);
   const runtime = await workerRuntime('src/entrypoints/worker-deploy.ts', {
     PKU_USERNAME: { type: 'text', value: 'synthetic' },
     PKU_PASSWORD: { type: 'text', value: 'synthetic-password' },
     CALENDAR_TOKEN: { type: 'text', value: token },
     CALENDAR_KV: { type: 'kv', id: 'production-entry-test' },
-  }, { __CALENDAR_CONFIG__: JSON.stringify(config) });
+  }, { __CALENDAR_CONFIG__: JSON.stringify(selected) });
   try {
-    const generated = generateFromHtml(timetable(), config, new Date());
-    const identity = cacheIdentity(config, 'synthetic');
+    const generated = generateFromHtml(timetable(), selected, new Date());
+    const identity = cacheIdentity(selected, 'synthetic');
     const { CALENDAR_KV: kv } = await runtime.getBindings<{ CALENDAR_KV: CalendarStore }>();
     await kv.put(identity.key, JSON.stringify({ ...generated, fingerprint: identity.fingerprint }));
     const response = await runtime.dispatchFetch(`http://localhost/calendar/${token}.ics`);

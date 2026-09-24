@@ -6,8 +6,9 @@ import { parseArgs } from 'node:util';
 import { generateCalendar, type GenerationDependencies, type GeneratedCalendar } from '../application/generate.js';
 import { errorCategory, logRecord } from '../application/log.js';
 import type { Credentials } from '../pku/auth.js';
-import { ConfigError, configWithPrivateConfirmations, validateConfig } from '../application/config.js';
+import { ConfigError, TimetableConfigError, configWithPrivateConfirmations, validateConfig } from '../application/config.js';
 import { assertGenerationAllowed } from '../application/semester.js';
+import { resolveCalendarConfig } from './calendar-config.js';
 import { semesterStatus } from '../application/setup.js';
 
 export async function readPrivateConfirmations(inline: string | undefined, file: string | undefined): Promise<string | undefined> {
@@ -42,7 +43,7 @@ export async function main(): Promise<void> {
       confirmations: { type: 'string' }, status: { type: 'boolean' }, help: { type: 'boolean' },
     }, strict: true });
     if (values.help) {
-      console.log('用法：npm run generate [-- --config config/calendar.json --output data/calendar.ics --confirmations data/confirmed-courses.json]\n先运行 npm run setup 选择校历；npm run status 可查看学期和日期状态，不会登录或生成。');
+      console.log('用法：npm run generate [-- --config config/calendar.json --output data/calendar.ics --confirmations data/confirmed-courses.json]\n先运行 npm run setup 选择校历；npm run status 可检查时间表、学期和日期状态，不会登录或生成。');
       return;
     }
     let input: unknown;
@@ -55,13 +56,15 @@ export async function main(): Promise<void> {
       }
       throw error;
     }
+    const selected = await resolveCalendarConfig(input);
     if (values.status) {
-      for (const line of semesterStatus(validateConfig(input), new Date())) console.log(line);
-      console.log('这里只检查学期和日期；课程与凭据将在生成时验证。');
+      console.log(`时间表：${selected.label}（${selected.source.timetable}）`);
+      for (const line of semesterStatus(selected.config, new Date())) console.log(line);
+      console.log('这里只检查时间表、学期和日期；课程与凭据将在生成时验证。');
       return;
     }
     const confirmations = await readPrivateConfirmations(process.env.PKU_UNSCHEDULED_COURSES, values.confirmations ?? process.env.PKU_UNSCHEDULED_COURSES_FILE);
-    const config = configWithPrivateConfirmations(input, confirmations);
+    const config = configWithPrivateConfirmations(selected.config, confirmations);
     await generateFile({ config, output: values.output, credentials: {
       username: process.env.PKU_USERNAME ?? '', password: process.env.PKU_PASSWORD ?? '',
     }, dependencies: { fetch, now: () => new Date() } });
@@ -74,7 +77,7 @@ export async function main(): Promise<void> {
       'parse:semester': '上游学期缺失或与配置不符。请核实当前选课学期，并运行 npm run setup 选择对应校历。',
       'schedule:time': '存在无法识别时间的课程，未生成日历。请核实时间说明；确无固定时间的课程需单独确认。',
     };
-    const message = guidance[errorCategory(error)];
+    const message = error instanceof TimetableConfigError ? error.guidance : guidance[errorCategory(error)];
     if (message) console.error(message);
     process.exitCode = 1;
   }

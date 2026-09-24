@@ -3,7 +3,8 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
-import { validateConfig, type CalendarConfig } from '../application/config.js';
+import { resolveCalendarConfig } from './calendar-config.js';
+import { validateSourceConfig, TimetableConfigError, type CalendarSourceConfig } from '../application/config.js';
 import { selectSemester, semesterStatus, SetupError, type SemesterPreset } from '../application/setup.js';
 
 const catalogueSchema = z.array(z.strictObject({
@@ -16,15 +17,15 @@ export async function loadPresets(directory = new URL('../../config/', import.me
   const catalogue = catalogueSchema.safeParse(JSON.parse(await readFile(new URL('semesters.json', directory), 'utf8')));
   if (!catalogue.success) throw new SetupError('catalogue');
   return Promise.all(catalogue.data.map(async entry => {
-    const calendar = validateConfig(JSON.parse(await readFile(new URL(entry.calendarFile, directory), 'utf8')));
+    const calendar = validateSourceConfig(JSON.parse(await readFile(new URL(entry.calendarFile, directory), 'utf8')));
     if (calendar.semester !== entry.semester || calendar.unscheduledCourses?.length) throw new SetupError('catalogue');
     return { label: entry.label, source: entry.source, calendar, validThrough: entry.validThrough };
   }));
 }
 
 /** Never replace an existing user's namespace, calendar, or private decisions. */
-export async function initializeCalendar(output: string, config: CalendarConfig): Promise<'created' | 'unchanged'> {
-  const valid = validateConfig(config);
+export async function initializeCalendar(output: string, config: CalendarSourceConfig): Promise<'created' | 'unchanged'> {
+  const valid = validateSourceConfig(config);
   const path = resolve(output);
   await mkdir(dirname(path), { recursive: true });
   try {
@@ -33,7 +34,7 @@ export async function initializeCalendar(output: string, config: CalendarConfig)
   } catch (error) {
     if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error;
     try {
-      if (JSON.stringify(validateConfig(JSON.parse(await readFile(path, 'utf8')))) === JSON.stringify(valid)) return 'unchanged';
+      if (JSON.stringify(validateSourceConfig(JSON.parse(await readFile(path, 'utf8')))) === JSON.stringify(valid)) return 'unchanged';
     } catch { /* Existing files must be preserved even if malformed. */ }
     throw new SetupError('exists');
   }
@@ -48,9 +49,11 @@ export async function main(): Promise<void> {
     }
     const now = new Date();
     const selected = selectSemester(await loadPresets(), now, values.semester);
+    const resolved = await resolveCalendarConfig(selected.config);
     const result = await initializeCalendar(values.output, selected.config);
     console.log(`${selected.label}\n${result === 'created' ? '学期配置已创建。' : '学期配置已就绪。'}`);
     for (const line of semesterStatus(selected.config, now)) console.log(line);
+    console.log(`时间表：${resolved.label}（${selected.config.timetable}）`);
     console.log('配置文件：' + values.output);
     console.log('校历来源：' + selected.source);
     console.log('下一步：在 .env 中填写凭据，然后运行 npm run generate。');
@@ -62,7 +65,7 @@ export async function main(): Promise<void> {
       exists: '目标配置已存在且内容不同，已保留。请用 npm run status 查看，或用 --output 选择新的配置文件。',
       catalogue: '校历资料不完整，请检查 config/semesters.json 及对应校历文件。',
     };
-    console.error(error instanceof SetupError ? messages[error.code] : '初始化失败，请检查命令参数、系统时间及校历配置。');
+    console.error(error instanceof TimetableConfigError ? error.guidance : error instanceof SetupError ? messages[error.code] : '初始化失败，请检查命令参数、系统时间及校历配置。');
     process.exitCode = 1;
   }
 }
