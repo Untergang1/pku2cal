@@ -1,0 +1,235 @@
+import { readFile } from 'node:fs/promises';
+import { afterEach, expect, it, vi } from 'vitest';
+import { command, parseApiResponse, repositoryFromOrigin, setupPages, type CommandResult, type PagesDependencies } from '../../src/entrypoints/pages-setup.js';
+
+const sha = 'a'.repeat(40);
+const otherSha = 'b'.repeat(40);
+const config = JSON.parse(await readFile(new URL('../../config/pku-main-2026-2027-1.json', import.meta.url), 'utf8'));
+config.semesterBinding = { confirmedSemester: '2026-2027-1', validFrom: '2026-09-07', validThrough: '2027-01-10' };
+const confirmation = [{ semester: '2026-2027-1', courseId: 'SYN002', classId: '01', confirmed: true, expectedSegments: ['(synthetic private decision)'] }];
+const response = (data: unknown, status = 200): CommandResult => ({
+  code: status >= 400 ? 1 : 0,
+  stdout: `HTTP/2.0 ${status} Test\r\nContent-Type: application/json\r\n\r\n${data === null ? '' : JSON.stringify(data)}`,
+});
+
+function fixture(options: {
+  pages?: 'missing' | 'legacy' | 'workflow'; failPath?: string; failStatus?: number;
+  dirty?: boolean; remoteSha?: string; changedSha?: boolean; conclusion?: string;
+  skipped?: boolean; wait?: boolean; runSha?: string; dispatchId?: boolean; secretsFail?: boolean;
+} = {}) {
+  const calls: { program: string; args: string[]; input: string | undefined }[] = [];
+  const logs: string[] = [];
+  let clock = Date.parse('2026-09-24T00:00:00Z');
+  let reads = 0;
+  let pagesRead = 0;
+  const d: PagesDependencies = {
+    env: { PKU_USERNAME: 'synthetic-user', PKU_PASSWORD: 'synthetic-password' },
+    read: async () => JSON.stringify(config), confirmations: async () => JSON.stringify(confirmation),
+    now: () => new Date(clock), sleep: async () => { clock += 5 * 60_000; }, log: value => logs.push(value),
+    command: async (program, args, input) => {
+      calls.push({ program, args, input });
+      if (program === 'git') {
+        const key = args.join(' ');
+        const output: Record<string, string> = {
+          'rev-parse --show-prefix': '',
+          'status --porcelain --untracked-files=normal': options.dirty ? ' M package.json' : '',
+          'remote get-url origin': 'git@github.com:calendar-owner/calendar.git',
+          'remote get-url --push origin': 'git@github.com:calendar-owner/calendar.git',
+          'rev-parse HEAD': sha,
+          'ls-files --error-unmatch config/calendar.json .github/workflows/pages.yml': 'config/calendar.json\n.github/workflows/pages.yml',
+        };
+        if (!(key in output)) throw new Error(`Unexpected git command: ${key}`);
+        return { code: 0, stdout: output[key]! };
+      }
+      if (program !== 'gh') throw new Error('Unexpected program');
+      if (args[0] === 'api') {
+        const path = args[1]!.replace('repos/calendar-owner/calendar', '');
+        const method = args[args.indexOf('--method') + 1];
+        if (path === options.failPath) return response({ message: 'private upstream error' }, options.failStatus ?? 403);
+        if (method !== 'GET') {
+          if (path.endsWith('/dispatches')) return response(options.dispatchId === false ? null : { workflow_run_id: 123 });
+          return response(null, method === 'POST' ? 201 : 204);
+        }
+        switch (path) {
+          case '': return response({ default_branch: 'main', archived: false, permissions: { push: true } });
+          case '/commits/main': return response({ sha: ++reads > 1 && options.changedSha ? otherSha : options.remoteSha ?? sha });
+          case '/actions/workflows/pages.yml': return response({ state: 'disabled_manually' });
+          case '/pages':
+            if (++pagesRead === 1 && (options.pages ?? 'missing') === 'missing') return response({ message: 'Not Found' }, 404);
+            return response({ build_type: pagesRead > 1 ? 'workflow' : options.pages ?? 'workflow', html_url: 'https://calendar-owner.github.io/calendar/' });
+          case '/actions/runs/123': return response({ head_sha: options.runSha ?? sha,
+            status: options.wait ? 'queued' : 'completed', conclusion: options.conclusion ?? 'success' });
+          case '/actions/runs/123/jobs?per_page=100': return response({ jobs: [
+            { name: 'generate', conclusion: 'success' }, { name: 'deploy', conclusion: options.skipped ? 'skipped' : 'success' },
+          ] });
+          default: throw new Error(`Unexpected API path: ${path}`);
+        }
+      }
+      if (options.secretsFail && args[0] === 'secret') return { code: 1, stdout: 'synthetic-password' };
+      return { code: 0, stdout: '' };
+    },
+  };
+  const writes = () => calls.filter(c => c.program === 'gh' && (
+    ['secret', 'variable'].includes(c.args[0]!) || c.args[0] === 'api' && c.args[c.args.indexOf('--method') + 1] !== 'GET'
+  ));
+  return { d, calls, logs, writes };
+}
+
+afterEach(() => vi.unstubAllEnvs());
+
+it.each([
+  ['git@github.com:person/fork.git', 'person/fork'],
+  ['https://github.com/person/fork.git', 'person/fork'],
+  ['ssh://git@github.com/person/fork.git', 'person/fork'],
+  ['https://github.com/person/fork/', 'person/fork'],
+])('resolves the explicit origin %s without gh fork defaults', (origin, expected) => {
+  expect(repositoryFromOrigin(origin)).toBe(expected);
+});
+
+it.each(['https://secret@github.com/person/repo.git', 'https://example.com/person/repo', 'git@alias:person/repo', 'https://github.com/person/..'])('rejects ambiguous or credential-bearing origin %s', origin => {
+  expect(() => repositoryFromOrigin(origin)).toThrow();
+});
+
+it('requires explicit publication consent before running any command', async () => {
+  const f = fixture();
+  await expect(setupPages(false, f.d)).rejects.toThrow('--publish');
+  expect(f.calls).toEqual([]);
+});
+
+it.each([{ dirty: true }, { remoteSha: otherSha }])('does not mutate GitHub when local work is not pushed: %j', async options => {
+  const f = fixture(options);
+  await expect(setupPages(true, f.d)).rejects.toThrow();
+  expect(f.writes()).toEqual([]);
+});
+
+it.each(['--version', 'auth'])('stops before mutation when gh %s fails', async action => {
+  const f = fixture();
+  const original = f.d.command;
+  f.d.command = async (program, args, input) => program === 'gh' && args[0] === action
+    ? { code: 1, stdout: 'private diagnostic' } : original(program, args, input);
+  await expect(setupPages(true, f.d)).rejects.toThrow(action === 'auth' ? 'gh auth login' : '安装');
+  expect(f.writes()).toEqual([]);
+});
+
+it('rejects different origin fetch/push repositories before contacting GitHub', async () => {
+  const f = fixture();
+  const original = f.d.command;
+  f.d.command = async (program, args, input) => program === 'git' && args.includes('--push')
+    ? { code: 0, stdout: 'git@github.com:someone/else.git' } : original(program, args, input);
+  await expect(setupPages(true, f.d)).rejects.toThrow('指向不同仓库');
+  expect(f.calls.some(c => c.args[0] === 'api')).toBe(false);
+});
+
+it('requires a registered remote workflow before uploading anything', async () => {
+  const f = fixture({ failPath: '/actions/workflows/pages.yml', failStatus: 404 });
+  await expect(setupPages(true, f.d)).rejects.toThrow('HTTP 404');
+  expect(f.writes()).toEqual([]);
+});
+
+it.each(['credentials', 'private-config', 'expired', 'unbound', 'confirmations'])('rejects invalid %s before mutation', async kind => {
+  const f = fixture();
+  if (kind === 'credentials') f.d.env = {};
+  if (kind === 'private-config') f.d.read = async () => JSON.stringify({ ...config, unscheduledCourses: [] });
+  if (kind === 'expired') f.d.now = () => new Date('2027-01-11T00:00:00Z');
+  if (kind === 'unbound') f.d.read = async () => JSON.stringify({ ...config, semesterBinding: undefined });
+  if (kind === 'confirmations') f.d.confirmations = async () => 'invalid synthetic-private-json';
+  await expect(setupPages(true, f.d)).rejects.toThrow('本地配置无效');
+  expect(f.writes()).toEqual([]);
+});
+
+it.each([401, 403, 500])('does not confuse Pages HTTP %s with an absent site', async status => {
+  const f = fixture({ failPath: '/pages', failStatus: status });
+  await expect(setupPages(true, f.d)).rejects.toThrow(`HTTP ${status}`);
+  expect(f.writes()).toEqual([]);
+});
+
+it.each(['missing', 'legacy', 'workflow'] as const)('configures a %s Pages site and waits for the exact dispatched run', async pages => {
+  const f = fixture({ pages });
+  expect(await setupPages(true, f.d)).toBe('https://calendar-owner.github.io/calendar/calendar.ics');
+  const siteWrites = f.writes().filter(c => c.args[1]?.endsWith('/pages'));
+  expect(siteWrites).toHaveLength(pages === 'workflow' ? 0 : 1);
+  if (siteWrites[0]) {
+    expect(siteWrites[0].args).toContain(pages === 'missing' ? 'POST' : 'PUT');
+    expect(JSON.parse(siteWrites[0].input!)).toEqual({ build_type: 'workflow' });
+  }
+  const secrets = f.writes().filter(c => c.args[0] === 'secret');
+  expect(secrets.map(c => c.args[2])).toEqual(['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES']);
+  expect(secrets[1]!.input).toBe('synthetic-password');
+  expect(JSON.parse(secrets[2]!.input!)).toEqual(confirmation);
+  for (const c of secrets) expect(c.args).toContain('calendar-owner/calendar');
+  expect(f.calls.map(c => c.args.join(' ')).join('\n')).not.toContain('synthetic-password');
+  expect(f.logs.join('\n')).not.toMatch(/synthetic-user|synthetic-password|SYN002/);
+  const writes = f.writes();
+  expect(writes.at(-2)!.args[0]).toBe('variable');
+  expect(writes.at(-1)!.args[1]).toContain('/dispatches');
+  expect(f.logs).toContain('本次运行：https://github.com/calendar-owner/calendar/actions/runs/123');
+});
+
+it('replaces previous remote confirmations with an empty list when none are configured locally', async () => {
+  const f = fixture({ pages: 'workflow' });
+  f.d.confirmations = async () => undefined;
+  await setupPages(true, f.d);
+  expect(f.calls.find(c => c.args[2] === 'PKU_UNSCHEDULED_COURSES')?.input).toBe('[]');
+});
+
+it('uses the actual custom Pages address without changing its domain settings', async () => {
+  const f = fixture({ pages: 'legacy' });
+  const original = f.d.command;
+  f.d.command = async (program, args, input) => {
+    const result = await original(program, args, input);
+    if (args[0] === 'api' && args[1]?.endsWith('/pages') && args.includes('GET')) {
+      return response({ build_type: 'legacy', html_url: 'https://calendar.example.org/' });
+    }
+    return result;
+  };
+  expect(await setupPages(true, f.d)).toBe('https://calendar.example.org/calendar.ics');
+  const write = f.writes().find(c => c.args[1]?.endsWith('/pages'))!;
+  expect(JSON.parse(write.input!)).toEqual({ build_type: 'workflow' });
+});
+
+it('stops after a failed Secret upload and redacts subprocess output', async () => {
+  const f = fixture({ secretsFail: true });
+  await expect(setupPages(true, f.d)).rejects.toThrow('已完成的配置会保留');
+  expect(f.writes().some(c => c.args[0] === 'variable')).toBe(false);
+  expect(f.logs.join('\n')).not.toContain('synthetic-password');
+});
+
+it('does not open the publication switch when the default branch changes during configuration', async () => {
+  const f = fixture({ changedSha: true });
+  await expect(setupPages(true, f.d)).rejects.toThrow('默认分支发生变化');
+  expect(f.writes().some(c => c.args[0] === 'variable')).toBe(false);
+});
+
+it.each([
+  [{ conclusion: 'failure' }, '工作流未成功'],
+  [{ skipped: true }, '可能被跳过'],
+  [{ wait: true }, '超过 15 分钟'],
+  [{ runSha: otherSha }, '不同提交'],
+  [{ dispatchId: false }, '返回结果不符合预期'],
+] as const)('does not report successful deployment for %j', async (options, message) => {
+  const f = fixture(options);
+  await expect(setupPages(true, f.d)).rejects.toThrow(message);
+  expect(f.logs.join('\n')).not.toContain('发布成功');
+  expect(f.writes().filter(c => c.args.includes('DELETE'))).toEqual([]);
+});
+
+it('distinguishes HTTP errors, malformed responses and transport failure without printing bodies', () => {
+  expect(parseApiResponse(response(null, 204))).toEqual({ status: 204, data: null });
+  expect(parseApiResponse(response({}, 404)).status).toBe(404);
+  expect(() => parseApiResponse({ code: 1, stdout: 'synthetic-password' })).toThrow('无法读取');
+  expect(() => parseApiResponse({ ...response({}), code: 1 })).toThrow('未完成');
+});
+
+it('passes secret input through a pipe, scrubs private/debug env, and handles missing executables', async () => {
+  vi.stubEnv('PKU_PASSWORD', 'synthetic-environment-secret');
+  vi.stubEnv('CALENDAR_TOKEN', 'synthetic-token');
+  vi.stubEnv('GH_DEBUG', 'api');
+  vi.stubEnv('GH_REPO', 'upstream/wrong-repo');
+  vi.stubEnv('GH_HOST', 'elsewhere.example');
+  const result = await command(process.execPath, ['--input-type=module', '-e',
+    'let input=""; for await (const chunk of process.stdin) input+=chunk; console.log(JSON.stringify({input, private:process.env.PKU_PASSWORD, token:process.env.CALENDAR_TOKEN, debug:process.env.GH_DEBUG, repo:process.env.GH_REPO, host:process.env.GH_HOST}));',
+  ], 'synthetic-pipe-secret');
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({ input: 'synthetic-pipe-secret', host: 'github.com' });
+  expect((await command('pku2cal-nonexistent-executable', [], 'synthetic-pipe-secret')).code).not.toBe(0);
+});

@@ -53,7 +53,7 @@ docs/            # 系统设计、参考资料及验证记录
   workflows/     # 跨平台 CI、定时生成与 Pages 发布
 ```
 
-- `pku/` 内分别设置 `auth`、`elective`、`parser` 模块，无需再建目录层级。`entrypoints/node` 供本地与 Actions 共用，负责配置读取和文件输出；`entrypoints/worker` 负责令牌、KV、刷新及 HTTP 响应；`worker-deploy` 仅导出部署处理器，避免 workerd 将测试辅助导出当作额外入口。`entrypoints/setup` 负责本地校历目录读取与初始化。Pages 发布由 workflow 承担。
+- `pku/` 内分别设置 `auth`、`elective`、`parser` 模块，无需再建目录层级。`entrypoints/node` 供本地与 Actions 共用，负责配置读取和文件输出；`entrypoints/worker` 负责令牌、KV、刷新及 HTTP 响应；`worker-deploy` 仅导出部署处理器，避免 workerd 将测试辅助导出当作额外入口。`entrypoints/setup` 负责本地校历目录读取与初始化；`entrypoints/pages-setup` 通过本机 Git 与 GitHub CLI 初始化 GitHub 配置和触发首次发布。Pages 发布由 workflow 承担。
 - 入口调用 `application`，由它编排 `pku → schedule → calendar`，核心不反向依赖入口。模块导出自己的数据类型，通过明确契约传递，不预设公共 `utils` 或全局 `types` 目录。
 - `config/` 存放配置数据；共用配置校验属于 `application`，环境相关的读取与注入属于入口。网络、时钟等外部能力通过参数传入；文件系统、KV 和部署操作留在对应入口或 workflow。
 - 根目录放置包清单、依赖锁文件、TypeScript、测试与 Wrangler 配置，随实现引入。本地私密数据放在已忽略的 `data/`，凭据使用未跟踪的环境文件；构建及工具缓存目录在引入时加入 `.gitignore`。测试样例不得包含真实个人数据。
@@ -77,6 +77,12 @@ docs/            # 系统设计、参考资料及验证记录
 ## 4. 运行入口与失败处理
 
 **静态入口**：本地生成 ICS；Actions 默认每 6 小时运行并支持手动触发。完整生成成功后才部署 Pages，失败保留原产物。产物通过部署流程发布，不提交源码仓库；Pages 地址公开可访问。
+
+`npm run pages:setup -- --publish` 是显式公开发布命令。用户预先安装并登录 `gh`，手动提交和推送。命令从标准 `github.com` origin 地址确定目标，检查读取／推送目标一致、工作区干净且 HEAD 等于远端默认分支，再检查公共校历绑定、有效期和本地私密配置。公共校历拒绝个人确认字段；私密文件读取复用 Node 入口。GitHub 初始化逻辑不进入共用生成核心。
+
+初始化先查询 Pages：仅 HTTP 404 作为未创建处理，其他错误停止；已有站点仅更新发布来源。随后通过子进程标准输入上传三个所需 Secrets（无确认项时写入 `[]`），启用工作流、复核远端提交、设置发布变量，使用 [GitHub REST API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) `2026-03-10` 触发发布并获取返回的运行 ID。仅跟踪该 ID，核对其提交、运行结论及 generate/deploy 两个任务，成功后根据 Pages API 的实际站点地址构造订阅 URL。每次子进程限时 60 秒，发布轮询限时 15 分钟。不会读取生成的个人 ICS 或打印远端原始错误；子进程移除私密课表环境变量和 gh 调试开关，Secrets 不进入参数或日志。
+
+初始化可重复执行，不自动提交／推送、修改组织策略或绕过部署审批，不代替 CI 或日历客户端验收。失败保留已完成的配置并报告阶段，不尝试删除站点或回滚无法读取的旧 Secrets；已经开启的发布保持开启，等待超时不取消远端任务。
 
 **动态入口**：`GET /calendar/<token>.ics` 使用 Secret 中的长随机令牌校验，错误令牌返回 `404`。持有完整地址即可读取日历，令牌轮换后需重新配置订阅。
 

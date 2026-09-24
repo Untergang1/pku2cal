@@ -16,6 +16,7 @@
     "generate": "npm run build && node --env-file-if-exists=.env dist/entrypoints/node.js",
     "setup": "npm run build && node dist/entrypoints/setup.js",
     "status": "npm run build && node dist/entrypoints/node.js --status",
+    "pages:setup": "npm run build && node --env-file-if-exists=.env dist/entrypoints/pages-setup.js",
     "worker:check": "node scripts/worker-check.mjs",
     "worker:build": "npm run build && node scripts/build-worker.mjs",
     "worker:dev": "wrangler dev",

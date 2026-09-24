@@ -59,7 +59,34 @@ npm run generate
 
 Pages 上的 ICS **公开可访问**，启用前请确认可以接受课表内容被访问。
 
-先将项目放到自己的 GitHub 仓库，并完成上面的校历配置：
+推荐使用一键初始化。先将项目放到自己的 GitHub 仓库，完成上面的本地生成与校历确认，安装 [GitHub CLI（gh）](https://cli.github.com/)，并登录有权管理该仓库的账号：
+
+```sh
+gh auth login
+```
+
+将公开校历 `config/calendar.json` 和代码提交并手动推送到 `origin` 的默认分支。在项目根目录运行（下例假设默认分支为 `main`）：
+
+```sh
+git push origin main
+npm run pages:setup -- --publish
+```
+
+`--publish` 表示同意公开课表并立即发布。命令会：
+
+1. 检查 `gh` 登录、Git 工作区干净、`origin` 读取与推送地址指向同一 GitHub 仓库，以及本地 HEAD 与远端默认分支一致。命令不会自动提交或推送。
+2. 检查公共校历的学期绑定与生成有效期，读取本地凭据和私密课程确认列表。请先人工核对当前学期；该检查不登录北大，也不能验证密码是否正确。
+3. 创建 Pages 或把已有站点的发布来源切换为 GitHub Actions，保留自定义域名等其他设置。
+4. 上传 `PKU_USERNAME`、`PKU_PASSWORD`、`PKU_UNSCHEDULED_COURSES` 三个 Actions Secrets。系统环境变量优先于 `.env`；文件形式的确认列表会上传 JSON 内容，不上传本地路径。没有确认项时上传 `[]`，替换远端旧列表。不会上传整个 `.env` 或 Worker 令牌。
+5. 启用工作流，设置仓库变量 `PUBLISH_CALENDAR=true`，手动触发一次发布并跟踪本次运行。生成和部署任务都成功后，输出实际 Pages 地址下的 `calendar.ics` 订阅 URL。
+
+命令仅支持 `github.com` 的标准 HTTPS／SSH `origin` 地址。需要账号拥有配置 Pages、Actions Secrets、Variables 和运行工作流的权限；组织策略或部署环境审批仍由 GitHub 控制。校历不得包含 `unscheduledCourses` 字段，个人确认项应使用 `.env` 中的私密来源。
+
+可重复运行以更新 Secrets 和重新发布；默认最多等待 15 分钟。中途失败会报告所在阶段，已经完成的配置保留，已有站点和旧日历不会被删除；已经开启的定时发布不会自动关闭，超时也不会取消远端任务。修复后可以重跑。首次使用前建议确认推送触发的 Linux／macOS CI 通过；初始化命令不会等待或代替 CI。
+
+在日历应用中添加输出的订阅 URL。GitHub 上的部署成功不代替客户端显示验收。
+
+也可以手动配置：
 
 1. 将核实后的非私密校历保存为 `config/calendar.json` 并提交。勿提交 `.env`、原始页面和 ICS。
 2. 在仓库 Actions Secrets 设置 `PKU_USERNAME`、`PKU_PASSWORD`。

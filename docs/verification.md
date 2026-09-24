@@ -35,9 +35,10 @@
 
 ## 交付检查（2026-09-24）
 
-- 本地 Linux / Node.js 22.23.2：从锁文件 `npm ci` 安装成功，审计报告无已知漏洞；`npm run check` 通过类型检查、构建和 93 项测试；`npm run worker:check` 通过 Wrangler dry-run。
+- 本地 Linux / Node.js 22.23.2：从锁文件 `npm ci` 安装成功，审计报告无已知漏洞；`npm run check` 通过类型检查、构建和 130 项测试；`npm run worker:check` 通过 Wrangler dry-run。
 - Markdown 相对链接及 Git diff 空白检查通过；Git 未跟踪 `.env`、`data/`、ICS 或运行时缓存。
 - 已整理官方校历目录及 `config/pku-main-2026-2027-1.json`，来源为 [北大官方校历与作息](https://www.pku.edu.cn/detail/3377.html)。已用 `setup` 将用户确认的学期和校历日期写入公开配置 `config/calendar.json`；未加入个人选课数据。
 - 已落实：人工学期绑定、上海日期边界、到期禁止生成且保留旧版、跨截止时间的写入保护，以及按学期和原始说明逐项确认无固定时间课程。确认列表通过私密配置／Secrets 注入，两个入口和 workerd 用例通过。
 - 新增验证覆盖官方目录选择、上海起止日期边界、无匹配或歧义时拒绝猜测、保留已有配置、状态提示和私密确认文件来源冲突。实际部署入口在 workerd 中启动并读取 KV 的回归用例通过。
+- Pages 一键初始化新增 37 项离线测试：覆盖显式发布授权、origin 目标与提交检查、gh 缺失／未登录、配置失效、Pages 创建／切换／复用、HTTP 错误区分、私密输入与日志隔离、空确认列表同步、远端提交变化、指定运行跟踪、失败／跳过／超时及自定义域名。GitHub 响应使用模拟，真实子进程测试使用合成输入；未上传真实 Secrets、修改 GitHub 设置或触发发布。命令帮助入口已在 Linux 执行验证。
 - 仍待：macOS／托管 Linux CI 执行、日历客户端订阅显示验收。公开 Pages 与云端 Worker 未发布。
