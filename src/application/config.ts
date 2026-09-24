@@ -64,7 +64,13 @@ function validatePeriods(value: CalendarConfig['periods']): void {
   value.sort((a, b) => a.period - b.period);
   for (let i = 0; i < value.length; i++) {
     const p = value[i]!;
-    if (p.start >= p.end || (i > 0 && (value[i - 1]!.period === p.period || value[i - 1]!.end > p.start))) throw new ConfigError();
+    if (p.start >= p.end || (i > 0 && value[i - 1]!.period === p.period)) throw new ConfigError();
+  }
+  // Upstream period numbers may need a non-chronological mapping. Keep the
+  // canonical number order for fingerprints, but check overlaps by actual time.
+  const chronological = [...value].sort((a, b) => a.start.localeCompare(b.start));
+  for (let i = 1; i < chronological.length; i++) {
+    if (chronological[i - 1]!.end > chronological[i]!.start) throw new ConfigError();
   }
 }
 

@@ -35,7 +35,13 @@ export function expandCourses(courses: RawCourse[], config: ScheduleConfig): Cal
     if (isConfirmedUnscheduled(course, config.unscheduledCourses ?? [])) continue;
     for (const segment of course.segments) {
       const slot = parseTime(segment, config.teachingWeeks);
-      for (let p = slot.startPeriod; p <= slot.endPeriod; p++) if (!periods.has(p)) throw new ScheduleError('periods');
+      for (let p = slot.startPeriod; p <= slot.endPeriod; p++) {
+        const current = periods.get(p);
+        if (!current) throw new ScheduleError('periods');
+        // A single mapped period is valid regardless of its number. A range
+        // must still run forward throughout, or its endpoints would omit time.
+        if (p > slot.startPeriod && periods.get(p - 1)!.end > current.start) throw new ScheduleError('periods');
+      }
       for (const week of slot.weeks) {
         const originalDate = addDays(config.firstMonday, (week - 1) * 7 + slot.weekday - 1);
         const identity = JSON.stringify([config.namespace, config.semester, course.courseId, course.classId, originalDate, slot.weekday, slot.startPeriod, slot.endPeriod]);

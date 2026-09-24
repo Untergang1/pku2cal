@@ -23,7 +23,14 @@ const { periods, ...fields } = synthetic;
 const customSource = { ...fields, timetable: 'pku-main' };
 const tables = {
   'pku-main': { label: '合成本部', periods },
-  'pku-ss': { label: '合成软微（非真实作息）', periods: periods.map(p => ({ ...p, start: p.start.replace(':00', ':05'), end: p.end.replace(':50', ':55') })) },
+  'pku-ss': { label: '合成软微（非真实作息）', periods: [
+    ...periods.map(p => ({ ...p, start: p.start.replace(':00', ':05'), end: p.end.replace(':50', ':55') })),
+    { period: 5, start: '14:00', end: '14:50' },
+    { period: 6, start: '15:00', end: '15:50' },
+    { period: 7, start: '16:00', end: '16:50' },
+    { period: 8, start: '13:00', end: '13:50' },
+    { period: 9, start: '18:00', end: '18:50' },
+  ] },
 };
 const directories: string[] = [];
 afterAll(async () => { for (const directory of directories) await rm(directory, { recursive: true, force: true }); });
@@ -102,7 +109,8 @@ it.each(['pku-main', 'pku-ss'])('uses the selected %s table consistently in Node
   const dir = await directory();
   const output = join(dir, 'node.ics');
   const pem = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'pem' }).toString();
-  const dependencies = { fetch: upstream(pem, timetable()), now: () => now };
+  const html = timetable([{ course: { ...course, segments: id === 'pku-ss' ? [...course.segments, '1周 周五8节'] : course.segments } }]);
+  const dependencies = { fetch: upstream(pem, html), now: () => now };
   const credentials = { username: 'synthetic', password: 'synthetic-password' };
   await generateFile({ config, output, credentials, dependencies });
   const bytes = await readFile(output, 'utf8');
@@ -131,4 +139,32 @@ it('checks selection through the built status CLI with calendar and cwd outside 
   const draft = spawnSync(process.execPath, [cli, '--status', '--config', path], { cwd: dir, encoding: 'utf8' });
   expect(draft.status).toBe(1);
   expect(draft.stderr).toContain('timetable: "pku-main" 或 "pku-ss"');
+});
+
+
+it('maps period 8 to lunchtime, preserves its UID and keeps canonical number order', async () => {
+  const { config } = await resolveCalendarConfig({ ...customSource, timetable: 'pku-ss' }, readSynthetic);
+  const mapped = { ...course, segments: ['1周 周一8节'] };
+  const events = expandCourses([mapped], config);
+  expect(events[0]).toMatchObject({ start: '2026-09-07T05:00:00.000Z', end: '2026-09-07T05:50:00.000Z' });
+  const original = { ...config, periods: config.periods.map(p => p.period === 8 ? { ...p, start: '17:00', end: '17:50' } : p) };
+  expect(events[0]!.uid).toBe(expandCourses([mapped], original)[0]!.uid);
+  expect(cacheIdentity(config, 'synthetic')).not.toEqual(cacheIdentity(original, 'synthetic'));
+  const reordered = validateConfig({ ...config, periods: [...config.periods].reverse() });
+  expect(reordered.periods.map(p => p.period)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  expect(cacheIdentity(reordered, 'synthetic')).toEqual(cacheIdentity(config, 'synthetic'));
+  const ics = generateFromHtml(timetable([{ course: mapped }]), config, now).ics;
+  expect(ics).toContain('DTSTART:20260907T050000Z');
+  expect(ics).toContain('DTEND:20260907T055000Z');
+  expect(() => expandCourses([{ ...course, segments: ['1周 周一5~7节'] }], config)).not.toThrow();
+});
+
+it.each(['7~8', '5~9'])('rejects time reversal inside a %s period range, even with increasing endpoints', async range => {
+  const { config } = await resolveCalendarConfig({ ...customSource, timetable: 'pku-ss' }, readSynthetic);
+  expect(() => generateFromHtml(timetable([{ course: { ...course, segments: [`1周 周一${range}节`] } }]), config, now)).toThrow('schedule:periods');
+});
+
+it('still rejects real overlap between non-adjacent period numbers', async () => {
+  const overlapping = { ...tables['pku-ss'], periods: tables['pku-ss'].periods.map(p => p.period === 8 ? { ...p, start: '14:30', end: '15:20' } : p) };
+  await expect(resolveCalendarConfig({ ...customSource, timetable: 'pku-ss' }, async () => JSON.stringify(overlapping))).rejects.toBeInstanceOf(TimetableConfigError);
 });
