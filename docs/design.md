@@ -53,7 +53,7 @@ docs/            # 系统设计、参考资料及验证记录
   workflows/     # 跨平台 CI、定时生成与 Pages 发布
 ```
 
-- `pku/` 内分别设置 `auth`、`elective`、`parser` 模块，无需再建目录层级。`entrypoints/node` 供本地与 Actions 共用，负责配置读取和文件输出；`entrypoints/worker` 负责令牌、KV、刷新及 HTTP 响应；`worker-deploy` 仅导出部署处理器，避免 workerd 将测试辅助导出当作额外入口。`entrypoints/setup` 负责本地校历目录读取与初始化；`entrypoints/pages-setup` 通过本机 Git 与 GitHub CLI 初始化 GitHub 配置和触发首次发布。Pages 发布由 workflow 承担。
+- `pku/` 内分别设置 `auth`、`elective`、`parser` 模块，无需再建目录层级。`entrypoints/node` 负责本地配置读取和文件输出；`entrypoints/pages-prepare` 调用共用生成逻辑，比较线上 ICS 并准备静态发布目录；`entrypoints/worker` 负责令牌、KV、刷新及 HTTP 响应；`worker-deploy` 仅导出部署处理器，避免 workerd 将测试辅助导出当作额外入口。`entrypoints/setup` 负责本地校历目录读取与初始化；`entrypoints/pages-setup` 通过本机 Git 与 GitHub CLI 初始化 GitHub 配置和触发首次发布。Pages 发布由 workflow 承担。
 - 入口调用 `application`，由它编排 `pku → schedule → calendar`，核心不反向依赖入口。模块导出自己的数据类型，通过明确契约传递，不预设公共 `utils` 或全局 `types` 目录。
 - `config/` 存放配置数据；共用配置校验属于 `application`，环境相关的读取与注入属于入口。网络、时钟等外部能力通过参数传入；文件系统、KV 和部署操作留在对应入口或 workflow。
 - 根目录放置包清单、依赖锁文件、TypeScript、测试与 Wrangler 配置，随实现引入。本地私密数据放在已忽略的 `data/`，凭据使用未跟踪的环境文件；构建及工具缓存目录在引入时加入 `.gitignore`。测试样例不得包含真实个人数据。
@@ -76,11 +76,19 @@ docs/            # 系统设计、参考资料及验证记录
 
 ## 4. 运行入口与失败处理
 
-**静态入口**：本地生成 ICS；Actions 默认每 6 小时运行并支持手动触发。完整生成成功后才部署 Pages，失败保留原产物。产物通过部署流程发布，不提交源码仓库；Pages 地址公开可访问。
+**静态入口**：本地生成 ICS；Actions 每天北京时间 06:17（UTC `17 22 * * *`）检查并支持手动触发。Pages 通过 `<token>/calendar.ics` 提供固定随机订阅地址，持有链接即可访问。仅在内容变化、首次返回 404 或 `force_publish=true` 时上传并部署；无变化时保留现有线上文件。artifact 显式保留一天，不提交源码或另存缓存基准。公开仓库的 artifact 在有效期内可被有读取权限的登录用户下载，这一边界不会因 Secret 遮蔽而改变。
+
+`pages-prepare` 使用共用生成逻辑完整生成候选 ICS，再通过 HTTPS 读取实际 Pages base URL 下的当前订阅。请求禁止重定向、30 秒超时并要求缓存重新验证；仅 404 表示没有基准，网络异常、其他状态码和损坏内容均停止发布。`calendar/compare` 使用运行依赖 ical.js 解析并校验日历及事件必要字段、唯一 UID 和时间范围，规范化参数键、属性及组件排列，仅排除 VEVENT 的 DTSTAMP。其他内容与参数均参与比较；不依赖原始文件哈希。
+
+需要发布时再次检查生成有效期，重建专用 `site/`，只写入当前令牌目录中的 ICS。部署成功后旧根路径和旧令牌路径随整站替换而移除，无兼容跳转；CDN 缓存可能延迟失效。无需发布时不写发布目录、不上传或部署。准备入口读取 `PAGES_CALENDAR_TOKEN`、`PAGES_BASE_URL`、`PAGES_FORCE_PUBLISH`，向 GITHUB_OUTPUT 仅写 changed 布尔值及 reason（missing/changed/unchanged/forced）；强制发布只绕过线上比较。
+
+workflow 使用 configure-pages 的 base_url 支持实际项目路径和自定义域名，生成任务只增加 pages:read，部署任务保留 pages:write 和 id-token:write。所有上传／部署受 changed 控制；无变化时执行固定名 Calendar unchanged 步骤，作为初始化检查的明确成功标志。继续串行运行同一 Pages 工作流。令牌通过环境注入并在打包列出路径前注册遮蔽，错误不含私密 URL、原始响应或课表。
 
 `npm run pages:setup -- --publish` 是显式公开发布命令。用户预先安装并登录 `gh`，手动提交和推送。命令从标准 `github.com` origin 地址确定目标，检查读取／推送目标一致、工作区干净且 HEAD 等于远端默认分支，再检查公共校历绑定、有效期和本地私密配置。公共校历拒绝个人确认字段；私密文件读取复用 Node 入口。GitHub 初始化逻辑不进入共用生成核心。
 
-初始化先查询 Pages：仅 HTTP 404 作为未创建处理，其他错误停止；已有站点仅更新发布来源。随后通过子进程标准输入上传三个所需 Secrets（无确认项时写入 `[]`），启用工作流、复核远端提交、设置发布变量，使用 [GitHub REST API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) `2026-03-10` 触发发布并获取返回的运行 ID。仅跟踪该 ID，核对其提交、运行结论及 generate/deploy 两个任务，成功后根据 Pages API 的实际站点地址构造订阅 URL。每次子进程限时 60 秒，发布轮询限时 15 分钟。不会读取生成的个人 ICS 或打印远端原始错误；子进程移除私密课表环境变量和 gh 调试开关，Secrets 不进入参数或日志。
+初始化前置检查完成后从 `data/pages/<owner>/<repo>.json` 读取令牌（仓库名小写）。首次以 32 字节安全随机数生成 base64url 令牌，原子保存，文件权限为 0600；远端已有 PAGES_CALENDAR_TOKEN 而本地缺失时停止，要求恢复文件或显式轮换。损坏文件不自动覆盖。`--rotate-token` 保存新令牌并强制发布，失败后普通重跑复用新值；`--force-publish` 仅强制发布。令牌与 Worker 的 CALENDAR_TOKEN 独立。
+
+初始化先查询 Pages：仅 HTTP 404 作为未创建处理，其他错误停止；已有站点仅更新发布来源。随后通过子进程标准输入上传四个所需 Secrets（包括 PAGES_CALENDAR_TOKEN）（无确认项时写入 `[]`），启用工作流、复核远端提交、设置发布变量，使用 [GitHub REST API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) `2026-03-10` 触发发布并获取返回的运行 ID。仅跟踪该 ID，核对其提交、运行结论及 generate/deploy 两个任务。接受 generate 与 deploy 均成功，或 generate 成功、Calendar unchanged 步骤成功且 deploy 跳过；强制发布或轮换时不接受跳过。根据 Pages API 实际站点地址和令牌构造订阅 URL，仅在本机结果中显示；禁止在 Actions 中运行初始化。每次子进程限时 60 秒，发布轮询限时 15 分钟。不会读取生成的个人 ICS 或打印远端原始错误；子进程移除私密课表环境变量和 gh 调试开关，Secrets 不进入参数或日志。
 
 初始化可重复执行，不自动提交／推送、修改组织策略或绕过部署审批，不代替 CI 或日历客户端验收。失败保留已完成的配置并报告阶段，不尝试删除站点或回滚无法读取的旧 Secrets；已经开启的发布保持开启，等待超时不取消远端任务。
 
@@ -90,7 +98,7 @@ KV 保存最近成功的 ICS、生成时间和配置指纹，按账号、学期�
 
 人工绑定有效期外不触发刷新；同配置下在有效期内生成的缓存仍可作为旧版返回，即使缓存不足六小时也标为 `stale`。有效期外生成的副本不作为有效缓存。修改有效期、确认学期或无固定时间确认列表会隔离缓存。
 
-成功响应使用 `text/calendar; charset=utf-8`；日历客户端自行决定订阅刷新时间。凭据仅来自 Actions Secrets、Worker Secrets 或未跟踪的本地配置。日志只记录阶段、错误类别和耗时，不记录凭据、会话、原始页面、课表或完整订阅地址。
+成功响应使用 `text/calendar; charset=utf-8`；日历客户端自行决定订阅刷新时间。凭据仅来自 Actions Secrets、Worker Secrets 或未跟踪的本地配置。日志只记录阶段、错误类别和耗时，不记录凭据、会话、原始页面、课表或完整订阅地址（本机初始化成功结果会显示私密订阅地址）。
 
 入口接口：`npm run setup` 初始化校历，`npm run status` 仅显示日期状态；`npm run generate` 默认读取 `config/calendar.json`，输出 `data/calendar.ics`，可用 `--config <json> --output <ics>` 覆盖。成功后同目录临时文件原子替换。Worker 使用 `CALENDAR_KV` 绑定和 `PKU_USERNAME`、`PKU_PASSWORD`、`CALENDAR_TOKEN` Secrets。Wrangler 的 custom build 从 `PKU_CONFIG_PATH`（默认 `config/calendar.json`）读取并校验配置，打包进 Worker；不将 Secrets 打包。`npm run worker:check` 使用合成示例完成不发布的构建检查。
 

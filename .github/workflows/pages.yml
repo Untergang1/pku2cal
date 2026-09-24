@@ -1,8 +1,14 @@
 name: Generate calendar and publish Pages
 on:
   schedule:
-    - cron: '17 */6 * * *'
+    # 06:17 Asia/Shanghai, daily.
+    - cron: '17 22 * * *'
   workflow_dispatch:
+    inputs:
+      force_publish:
+        description: Publish even if the calendar is unchanged
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -10,9 +16,14 @@ concurrency:
   cancel-in-progress: false
 jobs:
   generate:
-    # Opt-in: Pages calendars are public. Set this only after configuring the calendar.
+    # Opt-in: a secret URL does not make Pages artifacts private.
     if: ${{ vars.PUBLISH_CALENDAR == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    outputs:
+      changed: ${{ steps.prepare.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,16 +31,28 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: npm run generate -- --config config/calendar.json --output site/calendar.ics
+      - uses: actions/configure-pages@v5
+        id: pages
+      - run: npm run pages:prepare
+        id: prepare
         env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+          PAGES_CALENDAR_TOKEN: ${{ secrets.PAGES_CALENDAR_TOKEN }}
+          PAGES_FORCE_PUBLISH: ${{ inputs.force_publish && 'true' || 'false' }}
           PKU_USERNAME: ${{ secrets.PKU_USERNAME }}
           PKU_PASSWORD: ${{ secrets.PKU_PASSWORD }}
           PKU_UNSCHEDULED_COURSES: ${{ secrets.PKU_UNSCHEDULED_COURSES }}
+      - name: Calendar unchanged
+        if: ${{ steps.prepare.outputs.changed == 'false' }}
+        run: node -e "console.log('Calendar unchanged; keeping the current deployment.')"
       - uses: actions/upload-pages-artifact@v3
+        if: ${{ steps.prepare.outputs.changed == 'true' }}
         with:
           path: site
+          retention-days: 1
   deploy:
     needs: generate
+    if: ${{ needs.generate.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       pages: write

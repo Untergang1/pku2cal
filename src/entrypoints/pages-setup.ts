@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { configWithPrivateConfirmations, validateConfig } from '../application/config.js';
 import { assertGenerationAllowed } from '../application/semester.js';
 import { readPrivateConfirmations } from './node.js';
+import { newPagesToken, savePagesState, subscriptionUrl, validatePagesToken } from './pages-state.js';
 
 export class PagesSetupError extends Error {}
 
@@ -18,7 +19,7 @@ export type Command = (program: string, args: string[], input?: string) => Promi
 export const command: Command = (program, args, input) => new Promise(resolveResult => {
   const env: NodeJS.ProcessEnv = { ...process.env, GH_HOST: 'github.com', GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat' };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('PKU_') || ['CALENDAR_TOKEN', 'GH_DEBUG', 'DEBUG', 'GH_REPO'].includes(key)) delete env[key];
+    if (key.startsWith('PKU_') || ['CALENDAR_TOKEN', 'PAGES_CALENDAR_TOKEN', 'GH_DEBUG', 'DEBUG', 'GH_REPO'].includes(key)) delete env[key];
   }
   const child = execFile(program, args, { env, timeout: 60_000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, (error, stdout) => {
     resolveResult({ code: error ? 1 : 0, stdout });
@@ -52,6 +53,8 @@ export interface PagesDependencies {
   command: Command;
   read: (path: string) => Promise<string>;
   confirmations: () => Promise<string | undefined>;
+  save: (path: string, content: string) => Promise<void>;
+  randomToken: () => string;
   env: NodeJS.ProcessEnv;
   now: () => Date;
   sleep: (ms: number) => Promise<unknown>;
@@ -64,8 +67,9 @@ const runSchema = z.object({
   head_sha: shaSchema, status: nonempty, conclusion: z.string().nullable(),
 });
 
-export async function setupPages(publish: boolean, d: PagesDependencies): Promise<string> {
+export async function setupPages(publish: boolean, d: PagesDependencies, options: { rotateToken?: boolean; forcePublish?: boolean } = {}): Promise<string> {
   if (!publish) throw new PagesSetupError('Pages 课表将公开可访问。确认后运行 npm run pages:setup -- --publish。');
+  if (d.env.GITHUB_ACTIONS === 'true') throw new PagesSetupError('请在本机运行初始化，避免把完整订阅地址写入 Actions 日志。');
   const checked = async (program: string, args: string[], message: string, input?: string): Promise<string> => {
     const result = await d.command(program, args, input);
     if (result.code !== 0) throw new PagesSetupError(message);
@@ -125,6 +129,27 @@ export async function setupPages(publish: boolean, d: PagesDependencies): Promis
   const pages = existing === null ? null : pagesSchema.parse(existing);
   d.log('检查通过：远端默认分支与本地提交一致，本地校历和私密配置有效。');
 
+  const statePath = `data/pages/${repository.toLowerCase()}.json`;
+  let token: string | undefined;
+  try {
+    const state = z.object({ repository: z.literal(repository.toLowerCase()), token: z.string() }).parse(JSON.parse(await d.read(statePath)));
+    token = validatePagesToken(state.token);
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+      throw new PagesSetupError('本地 Pages 令牌文件无效，请恢复正确的私密文件；不会自动覆盖。');
+    }
+  }
+  if (!token && !options.rotateToken) {
+    const remote = await api('/actions/secrets/PAGES_CALENDAR_TOKEN', 'GET', undefined, true);
+    if (remote !== null) throw new PagesSetupError('本地 Pages 令牌文件缺失，但远端已有 Secret。请恢复 data/pages 下的私密文件，或使用 --publish --rotate-token 更换订阅地址。');
+  }
+  if (!token || options.rotateToken) {
+    token = validatePagesToken(d.randomToken());
+    try { await d.save(statePath, JSON.stringify({ repository: repository.toLowerCase(), token }) + '\n'); }
+    catch { throw new PagesSetupError('无法保存本地 Pages 令牌，尚未修改远端配置。'); }
+  }
+  secrets.PAGES_CALENDAR_TOKEN = token;
+  let unchanged = false;
   let stage = '配置 Pages';
   try {
     if (!pages) await api('/pages', 'POST', { build_type: 'workflow' });
@@ -147,7 +172,7 @@ export async function setupPages(publish: boolean, d: PagesDependencies): Promis
     stage = '触发首次发布';
     // Current GitHub API returns the dispatched run ID; never guess from the latest run.
     const dispatched = z.object({ workflow_run_id: z.number().int().positive() }).parse(
-      await api('/actions/workflows/pages.yml/dispatches', 'POST', { ref: repo.default_branch }),
+      await api('/actions/workflows/pages.yml/dispatches', 'POST', { ref: repo.default_branch, inputs: { force_publish: options.forcePublish === true || options.rotateToken === true } }),
     );
     const runPath = `/actions/runs/${dispatched.workflow_run_id}`;
     const runUrl = `https://github.com/${repository}/actions/runs/${dispatched.workflow_run_id}`;
@@ -160,8 +185,15 @@ export async function setupPages(publish: boolean, d: PagesDependencies): Promis
       if (run.head_sha !== localSha) throw new PagesSetupError('远端运行使用了不同提交，请在运行页面检查后重新同步。');
       if (run.status === 'completed') {
         if (run.conclusion !== 'success') throw new PagesSetupError('本次工作流未成功，请在运行页面检查失败步骤。');
-        const jobs = z.object({ jobs: z.array(z.object({ name: nonempty, conclusion: z.string().nullable() })) }).parse(await api(`${runPath}/jobs?per_page=100`)).jobs;
-        if (!['generate', 'deploy'].every(name => jobs.some(job => job.name === name && job.conclusion === 'success'))) {
+        const jobs = z.object({ jobs: z.array(z.object({ name: nonempty, conclusion: z.string().nullable(),
+          steps: z.array(z.object({ name: nonempty, conclusion: z.string().nullable() })).default([]),
+        })) }).parse(await api(`${runPath}/jobs?per_page=100`)).jobs;
+        const generate = jobs.find(job => job.name === 'generate');
+        const deploy = jobs.find(job => job.name === 'deploy');
+        unchanged = generate?.conclusion === 'success' && deploy?.conclusion === 'skipped'
+          && generate.steps.some(step => step.name === 'Calendar unchanged' && step.conclusion === 'success');
+        if (generate?.conclusion !== 'success' || !(deploy?.conclusion === 'success' || unchanged)
+          || (unchanged && (options.forcePublish || options.rotateToken))) {
           throw new PagesSetupError('生成或部署任务未成功完成（可能被跳过），不能确认发布成功。');
         }
         break;
@@ -171,12 +203,9 @@ export async function setupPages(publish: boolean, d: PagesDependencies): Promis
     }
     stage = '获取订阅地址';
     const deployed = pagesSchema.parse(await api('/pages'));
-    const site = new URL(deployed.html_url);
-    if (!['http:', 'https:'].includes(site.protocol) || site.username || site.password) throw new PagesSetupError('Pages 返回的站点地址无效。');
-    site.pathname = site.pathname.replace(/\/?$/, '/') + 'calendar.ics';
-    site.search = ''; site.hash = '';
-    d.log(`发布成功。订阅地址：${site.href}`);
-    return site.href;
+    const url = subscriptionUrl(deployed.html_url, token);
+    d.log(`${unchanged ? '课表未变化，保留现有发布' : '发布成功'}。订阅地址（请保密）：${url}`);
+    return url;
   } catch (error) {
     const detail = error instanceof PagesSetupError ? error.message : '返回结果不符合预期，请检查 GitHub 设置或网络后重试。';
     throw new PagesSetupError(`${stage}失败：${detail}\n已完成的配置会保留，未删除既有站点或旧日历。修复后可重新运行；已开启的发布不会自动关闭。`);
@@ -185,16 +214,16 @@ export async function setupPages(publish: boolean, d: PagesDependencies): Promis
 
 export async function main(): Promise<void> {
   try {
-    const { values } = parseArgs({ options: { publish: { type: 'boolean' }, help: { type: 'boolean' } }, strict: true });
+    const { values } = parseArgs({ options: { publish: { type: 'boolean' }, 'rotate-token': { type: 'boolean' }, 'force-publish': { type: 'boolean' }, help: { type: 'boolean' } }, strict: true });
     if (values.help) {
-      console.log('用法：npm run pages:setup -- --publish\n先安装 gh 并运行 gh auth login，手动提交并 push 到 origin 的默认分支。\n读取 .env 和 config/calendar.json；上传所需 Secrets，配置 Pages，公开发布并等待结果。');
+      console.log('用法：npm run pages:setup -- --publish [--force-publish] [--rotate-token]\n先安装 gh 并运行 gh auth login，手动提交并 push 到 origin 的默认分支。\n读取 .env 和 config/calendar.json；保存并复用本地随机令牌，上传 Secrets，检查变化后发布。\n--force-publish 强制发布；--rotate-token 更换令牌并强制发布，旧地址随后失效。');
       return;
     }
     await setupPages(values.publish === true, {
-      command, read: path => readFile(path, 'utf8'), env: process.env,
+      command, read: path => readFile(path, 'utf8'), save: savePagesState, randomToken: newPagesToken, env: process.env,
       confirmations: () => readPrivateConfirmations(process.env.PKU_UNSCHEDULED_COURSES, process.env.PKU_UNSCHEDULED_COURSES_FILE),
       now: () => new Date(), sleep, log: message => console.log(message),
-    });
+    }, { rotateToken: values['rotate-token'] === true, forcePublish: values['force-publish'] === true });
   } catch (error) {
     console.error(error instanceof PagesSetupError ? error.message : 'Pages 初始化失败，请检查命令参数、GitHub 响应和本地配置。');
     process.exitCode = 1;

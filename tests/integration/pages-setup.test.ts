@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { command, parseApiResponse, repositoryFromOrigin, setupPages, type CommandResult, type PagesDependencies } from '../../src/entrypoints/pages-setup.js';
 
+const token = Buffer.alloc(32, 1).toString('base64url');
 const sha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
 const config = JSON.parse(await readFile(new URL('../../config/pku-main-2026-2027-1.json', import.meta.url), 'utf8'));
@@ -15,16 +16,24 @@ const response = (data: unknown, status = 200): CommandResult => ({
 function fixture(options: {
   pages?: 'missing' | 'legacy' | 'workflow'; failPath?: string; failStatus?: number;
   dirty?: boolean; remoteSha?: string; changedSha?: boolean; conclusion?: string;
+  unchanged?: boolean; remoteToken?: boolean; localToken?: string;
   skipped?: boolean; wait?: boolean; runSha?: string; dispatchId?: boolean; secretsFail?: boolean;
 } = {}) {
   const calls: { program: string; args: string[]; input: string | undefined }[] = [];
   const logs: string[] = [];
+  const saved = new Map<string, string>();
+  if (options.localToken) saved.set('data/pages/calendar-owner/calendar.json', JSON.stringify({ repository: 'calendar-owner/calendar', token: options.localToken }));
   let clock = Date.parse('2026-09-24T00:00:00Z');
   let reads = 0;
   let pagesRead = 0;
   const d: PagesDependencies = {
     env: { PKU_USERNAME: 'synthetic-user', PKU_PASSWORD: 'synthetic-password' },
-    read: async () => JSON.stringify(config), confirmations: async () => JSON.stringify(confirmation),
+    read: async path => {
+      if (path === 'config/calendar.json') return JSON.stringify(config);
+      if (saved.has(path)) return saved.get(path)!;
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    },
+    save: async (path, content) => { saved.set(path, content); }, randomToken: () => token, confirmations: async () => JSON.stringify(confirmation),
     now: () => new Date(clock), sleep: async () => { clock += 5 * 60_000; }, log: value => logs.push(value),
     command: async (program, args, input) => {
       calls.push({ program, args, input });
@@ -53,6 +62,7 @@ function fixture(options: {
         switch (path) {
           case '': return response({ default_branch: 'main', archived: false, permissions: { push: true } });
           case '/commits/main': return response({ sha: ++reads > 1 && options.changedSha ? otherSha : options.remoteSha ?? sha });
+          case '/actions/secrets/PAGES_CALENDAR_TOKEN': return options.remoteToken ? response({ name: 'PAGES_CALENDAR_TOKEN' }) : response(null, 404);
           case '/actions/workflows/pages.yml': return response({ state: 'disabled_manually' });
           case '/pages':
             if (++pagesRead === 1 && (options.pages ?? 'missing') === 'missing') return response({ message: 'Not Found' }, 404);
@@ -60,7 +70,7 @@ function fixture(options: {
           case '/actions/runs/123': return response({ head_sha: options.runSha ?? sha,
             status: options.wait ? 'queued' : 'completed', conclusion: options.conclusion ?? 'success' });
           case '/actions/runs/123/jobs?per_page=100': return response({ jobs: [
-            { name: 'generate', conclusion: 'success' }, { name: 'deploy', conclusion: options.skipped ? 'skipped' : 'success' },
+            { name: 'generate', conclusion: 'success', steps: [{ name: 'Calendar unchanged', conclusion: options.unchanged ? 'success' : 'skipped' }] }, { name: 'deploy', conclusion: options.skipped || options.unchanged ? 'skipped' : 'success' },
           ] });
           default: throw new Error(`Unexpected API path: ${path}`);
         }
@@ -72,7 +82,7 @@ function fixture(options: {
   const writes = () => calls.filter(c => c.program === 'gh' && (
     ['secret', 'variable'].includes(c.args[0]!) || c.args[0] === 'api' && c.args[c.args.indexOf('--method') + 1] !== 'GET'
   ));
-  return { d, calls, logs, writes };
+  return { d, calls, logs, writes, saved };
 }
 
 afterEach(() => vi.unstubAllEnvs());
@@ -145,7 +155,7 @@ it.each([401, 403, 500])('does not confuse Pages HTTP %s with an absent site', a
 
 it.each(['missing', 'legacy', 'workflow'] as const)('configures a %s Pages site and waits for the exact dispatched run', async pages => {
   const f = fixture({ pages });
-  expect(await setupPages(true, f.d)).toBe('https://calendar-owner.github.io/calendar/calendar.ics');
+  expect(await setupPages(true, f.d)).toBe(`https://calendar-owner.github.io/calendar/${token}/calendar.ics`);
   const siteWrites = f.writes().filter(c => c.args[1]?.endsWith('/pages'));
   expect(siteWrites).toHaveLength(pages === 'workflow' ? 0 : 1);
   if (siteWrites[0]) {
@@ -153,7 +163,7 @@ it.each(['missing', 'legacy', 'workflow'] as const)('configures a %s Pages site 
     expect(JSON.parse(siteWrites[0].input!)).toEqual({ build_type: 'workflow' });
   }
   const secrets = f.writes().filter(c => c.args[0] === 'secret');
-  expect(secrets.map(c => c.args[2])).toEqual(['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES']);
+  expect(secrets.map(c => c.args[2])).toEqual(['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES', 'PAGES_CALENDAR_TOKEN']);
   expect(secrets[1]!.input).toBe('synthetic-password');
   expect(JSON.parse(secrets[2]!.input!)).toEqual(confirmation);
   for (const c of secrets) expect(c.args).toContain('calendar-owner/calendar');
@@ -182,7 +192,7 @@ it('uses the actual custom Pages address without changing its domain settings', 
     }
     return result;
   };
-  expect(await setupPages(true, f.d)).toBe('https://calendar.example.org/calendar.ics');
+  expect(await setupPages(true, f.d)).toBe(`https://calendar.example.org/${token}/calendar.ics`);
   const write = f.writes().find(c => c.args[1]?.endsWith('/pages'))!;
   expect(JSON.parse(write.input!)).toEqual({ build_type: 'workflow' });
 });
@@ -223,13 +233,69 @@ it('distinguishes HTTP errors, malformed responses and transport failure without
 it('passes secret input through a pipe, scrubs private/debug env, and handles missing executables', async () => {
   vi.stubEnv('PKU_PASSWORD', 'synthetic-environment-secret');
   vi.stubEnv('CALENDAR_TOKEN', 'synthetic-token');
+  vi.stubEnv('PAGES_CALENDAR_TOKEN', token);
   vi.stubEnv('GH_DEBUG', 'api');
   vi.stubEnv('GH_REPO', 'upstream/wrong-repo');
   vi.stubEnv('GH_HOST', 'elsewhere.example');
   const result = await command(process.execPath, ['--input-type=module', '-e',
-    'let input=""; for await (const chunk of process.stdin) input+=chunk; console.log(JSON.stringify({input, private:process.env.PKU_PASSWORD, token:process.env.CALENDAR_TOKEN, debug:process.env.GH_DEBUG, repo:process.env.GH_REPO, host:process.env.GH_HOST}));',
+    'let input=""; for await (const chunk of process.stdin) input+=chunk; console.log(JSON.stringify({input, private:process.env.PKU_PASSWORD, token:process.env.CALENDAR_TOKEN, pagesToken:process.env.PAGES_CALENDAR_TOKEN, debug:process.env.GH_DEBUG, repo:process.env.GH_REPO, host:process.env.GH_HOST}));',
   ], 'synthetic-pipe-secret');
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({ input: 'synthetic-pipe-secret', host: 'github.com' });
   expect((await command('pku2cal-nonexistent-executable', [], 'synthetic-pipe-secret')).code).not.toBe(0);
+});
+
+it('persists one token and reuses it on subsequent initialization', async () => {
+  const f = fixture();
+  const random = vi.fn(f.d.randomToken);
+  f.d.randomToken = random;
+  const first = await setupPages(true, f.d);
+  expect(await setupPages(true, f.d)).toBe(first);
+  expect(random).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(f.saved.get('data/pages/calendar-owner/calendar.json')!)).toEqual({ repository: 'calendar-owner/calendar', token });
+});
+
+it('does not replace a missing local token when GitHub already has one', async () => {
+  const f = fixture({ remoteToken: true });
+  await expect(setupPages(true, f.d)).rejects.toThrow('本地 Pages 令牌文件缺失');
+  expect(f.writes()).toEqual([]);
+  expect(f.saved.size).toBe(0);
+});
+
+it('rejects a damaged local token without overwriting it', async () => {
+  const f = fixture({ localToken: 'invalid' });
+  await expect(setupPages(true, f.d)).rejects.toThrow('令牌文件无效');
+  expect(f.writes()).toEqual([]);
+});
+
+it('stops before remote mutation if token persistence fails', async () => {
+  const f = fixture();
+  f.d.save = async () => { throw new Error('private path'); };
+  await expect(setupPages(true, f.d)).rejects.toThrow('无法保存');
+  expect(f.writes()).toEqual([]);
+});
+
+it('rotates explicitly and forces publication, then reuses the saved token on retry', async () => {
+  const f = fixture({ localToken: Buffer.alloc(32, 2).toString('base64url') });
+  await setupPages(true, f.d, { rotateToken: true });
+  expect(JSON.parse(f.saved.get('data/pages/calendar-owner/calendar.json')!).token).toBe(token);
+  const dispatch = f.calls.find(c => c.args[1]?.endsWith('/dispatches'))!;
+  expect(JSON.parse(dispatch.input!).inputs).toEqual({ force_publish: true });
+  await setupPages(true, f.d);
+  expect(f.calls.filter(c => c.args[2] === 'PAGES_CALENDAR_TOKEN').every(c => c.input === token)).toBe(true);
+});
+
+it('accepts an explicitly unchanged run, but not for forced publication', async () => {
+  const f = fixture({ unchanged: true });
+  expect(await setupPages(true, f.d)).toContain(token);
+  expect(f.logs.join('\n')).toContain('课表未变化');
+  const forced = fixture({ unchanged: true });
+  await expect(setupPages(true, forced.d, { forcePublish: true })).rejects.toThrow('可能被跳过');
+});
+
+it('rejects Actions execution before exposing a local subscription URL', async () => {
+  const f = fixture();
+  f.d.env.GITHUB_ACTIONS = 'true';
+  await expect(setupPages(true, f.d)).rejects.toThrow('本机');
+  expect(f.calls).toEqual([]);
 });

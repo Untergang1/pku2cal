@@ -9,7 +9,7 @@
 | 方式 | 适合的需求 | 更新方式 |
 | --- | --- | --- |
 | [本地生成](#本地生成) | 在自己的电脑上生成 ICS 文件 | 手动生成并导入日历应用 |
-| [GitHub Actions 与 Pages](#github-actions-与-pages) | 使用固定地址订阅，接受课表公开可访问 | 每六小时生成并发布 |
+| [GitHub Actions 与 Pages](#github-actions-与-pages) | 使用固定随机地址订阅，接受链接及 artifact 的访问边界 | 每天 06:17 检查，内容变化时发布 |
 | [Cloudflare Worker](#cloudflare-worker) | 使用带私密令牌的地址订阅 | 请求时检查缓存，超过六小时尝试更新 |
 
 订阅地址更新后，日历应用仍按自身的刷新机制获取变化。个人课表、登录凭据、会话和 ICS 文件不要提交到仓库或公开日志；凭据通过本地环境文件或部署平台的 Secrets 配置。
@@ -57,7 +57,7 @@ npm run generate
 
 ## GitHub Actions 与 Pages
 
-Pages 上的 ICS **公开可访问**，启用前请确认可以接受课表内容被访问。
+Pages 使用固定随机地址降低被猜到的风险，**持有完整链接即可访问课表**。公开仓库的登录用户可下载尚未过期的 Actions artifact，获得路径和课表；本项目将发布 artifact 保留期设为一天，接受此风险后再启用。完整订阅地址应当保密。
 
 推荐使用一键初始化。先将项目放到自己的 GitHub 仓库，完成上面的本地生成与校历确认，安装 [GitHub CLI（gh）](https://cli.github.com/)，并登录有权管理该仓库的账号：
 
@@ -72,30 +72,46 @@ git push origin main
 npm run pages:setup -- --publish
 ```
 
-`--publish` 表示同意公开课表并立即发布。命令会：
+`--publish` 表示同意公开课表并立即检查，需要时发布。命令会：
 
 1. 检查 `gh` 登录、Git 工作区干净、`origin` 读取与推送地址指向同一 GitHub 仓库，以及本地 HEAD 与远端默认分支一致。命令不会自动提交或推送。
 2. 检查公共校历的学期绑定与生成有效期，读取本地凭据和私密课程确认列表。请先人工核对当前学期；该检查不登录北大，也不能验证密码是否正确。
-3. 创建 Pages 或把已有站点的发布来源切换为 GitHub Actions，保留自定义域名等其他设置。
-4. 上传 `PKU_USERNAME`、`PKU_PASSWORD`、`PKU_UNSCHEDULED_COURSES` 三个 Actions Secrets。系统环境变量优先于 `.env`；文件形式的确认列表会上传 JSON 内容，不上传本地路径。没有确认项时上传 `[]`，替换远端旧列表。不会上传整个 `.env` 或 Worker 令牌。
-5. 启用工作流，设置仓库变量 `PUBLISH_CALENDAR=true`，手动触发一次发布并跟踪本次运行。生成和部署任务都成功后，输出实际 Pages 地址下的 `calendar.ics` 订阅 URL。
+3. 首次生成 32 字节随机令牌，以 `0600` 权限原子保存到忽略的 `data/pages/<owner>/<repo>.json`（仓库名小写）；重复运行复用。随后创建 Pages 或切换其发布来源为 GitHub Actions，保留自定义域名等其他设置。
+4. 上传 `PKU_USERNAME`、`PKU_PASSWORD`、`PKU_UNSCHEDULED_COURSES` 及独立的 `PAGES_CALENDAR_TOKEN`，共四个 Actions Secrets。系统环境变量优先于 `.env`；文件形式的确认列表会上传 JSON 内容，不上传本地路径。没有确认项时上传 `[]`，替换远端旧列表。不会上传整个 `.env` 或 Worker 令牌。
+5. 启用工作流，设置仓库变量 `PUBLISH_CALENDAR=true`，触发检查并跟踪本次运行。部署成功或明确确认课表未变化后，在本地输出实际 Pages 地址下的 `<令牌>/calendar.ics` 订阅 URL；支持自定义域名。
 
 命令仅支持 `github.com` 的标准 HTTPS／SSH `origin` 地址。需要账号拥有配置 Pages、Actions Secrets、Variables 和运行工作流的权限；组织策略或部署环境审批仍由 GitHub 控制。校历不得包含 `unscheduledCourses` 字段，个人确认项应使用 `.env` 中的私密来源。
 
-可重复运行以更新 Secrets 和重新发布；默认最多等待 15 分钟。中途失败会报告所在阶段，已经完成的配置保留，已有站点和旧日历不会被删除；已经开启的定时发布不会自动关闭，超时也不会取消远端任务。修复后可以重跑。首次使用前建议确认推送触发的 Linux／macOS CI 通过；初始化命令不会等待或代替 CI。
+可重复运行以更新 Secrets 并检查变化；默认最多等待 15 分钟。中途失败会报告所在阶段，已经完成的配置保留，已有站点和旧日历不会被删除；已经开启的定时发布不会自动关闭，超时也不会取消远端任务。修复后可以重跑。首次使用前建议确认推送触发的 Linux／macOS CI 通过；初始化命令不会等待或代替 CI。
 
-在日历应用中添加输出的订阅 URL。GitHub 上的部署成功不代替客户端显示验收。
+在日历应用中添加输出的订阅 URL。GitHub 上的部署成功不代替客户端显示验收。首次迁移会在新部署成功后移除旧 `/calendar.ics`，不保留跳转，请更新客户端订阅；CDN 缓存可能延迟旧地址失效。
+
+请备份 `data/pages/` 中的私密令牌文件。换电脑后如果本地文件丢失而远端已有 Secret，初始化会停止，避免意外更换订阅地址；GitHub 无法返回 Secret 的值。恢复文件后重跑，或显式轮换：
+
+```sh
+npm run pages:setup -- --publish --rotate-token
+```
+
+轮换会保存新令牌、上传 Secret 并强制发布，成功后旧随机地址不再包含在站点中。若中途失败，修复后使用普通 `--publish` 重试，复用已保存的新令牌；不要再次附加 `--rotate-token`，否则会再生成一个令牌。已下载的课表无法收回，本地损坏的令牌文件需恢复，初始化不会自动覆盖。
+
+需要跳过对比、修复线上内容时使用 `npm run pages:setup -- --publish --force-publish`；它仍要求配置有效、课表完整生成成功。初始化仅供本机运行，避免将完整订阅链接写入 Actions 日志。
 
 也可以手动配置：
 
 1. 将核实后的非私密校历保存为 `config/calendar.json` 并提交。勿提交 `.env`、原始页面和 ICS。
 2. 在仓库 Actions Secrets 设置 `PKU_USERNAME`、`PKU_PASSWORD`。
    如有已确认无固定时间课程，再设置 `PKU_UNSCHEDULED_COURSES` Secret。
-3. 将 Pages 的发布来源设为 GitHub Actions。
+3. 用 `npm run token` 生成并私密备份令牌，将其设置为 Actions Secret `PAGES_CALENDAR_TOKEN`；将 Pages 的发布来源设为 GitHub Actions。手动配置后若要改用一键初始化，应恢复对应的本地 JSON 文件（格式为 `{"repository":"owner/repo","token":"<令牌>"}`）或显式轮换。
 4. 确认课表可以公开访问后，设置仓库变量 `PUBLISH_CALENDAR=true`，手动运行 Generate calendar and publish Pages。
-5. 订阅 Pages 地址下的 `calendar.ics`；此地址公开可访问。
+5. 订阅 Pages 地址下的 `<令牌>/calendar.ics`；不要公开此地址。
 
-工作流每六小时运行，也支持手动触发。生成失败不会上传或部署，已有 Pages 部署保留。发布物通过 artifact 传递，不进入源码历史。日历客户端自行决定何时重新获取订阅。
+工作流每天北京时间 **06:17** 检查（UTC `17 22 * * *`），也支持手动触发；手动运行的 `force_publish` 默认关闭。调度可能延迟，日历客户端自行决定刷新时间，因此不保证当天临时调课即时同步。公开仓库长期无活动时 GitHub 可能停用定时任务，应留意 Actions 状态。
+
+每次完整生成候选 ICS 后，以当前随机 URL 上的日历作为比较基准。比较忽略事件 `DTSTAMP`、属性顺序及折行差异，保留课程、时间、地点、说明等其余有效内容。内容相同则**不上传 artifact、不部署**，线上文件保持不变；内容变化、首次地址返回 `404` 或强制发布时才部署。artifact 显式保留一天，不使用额外 artifact 或 Actions cache 保存课表基准；产物不进入源码历史。
+
+线上读取使用 HTTPS、30 秒超时和缓存重新验证，不接受重定向。网络、非 `200`/`404` 响应、损坏日历、上游获取或生成失败都会使检查失败，已有站点保留。新部署仅包含当前随机目录，因此移除旧根地址及旧令牌目录。令牌提前遮蔽，公开日志不输出完整 URL 或课表。
+
+`npm run pages:prepare` 是工作流使用的准备入口，读取 `PAGES_CALENDAR_TOKEN`、`PAGES_BASE_URL`、`PAGES_FORCE_PUBLISH`（默认 `false`）及现有课表配置。需要发布时重建专用 `site/`；其 `GITHUB_OUTPUT` 仅包含 `changed` 和 `reason`（`missing`、`changed`、`unchanged`、`forced`）。普通本地导出继续使用 `npm run generate`。
 
 ## Cloudflare Worker
 
