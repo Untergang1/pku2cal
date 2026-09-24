@@ -115,7 +115,51 @@ npm run pages:setup -- --publish --rotate-token
 
 ## Cloudflare Worker
 
-先准备校历 `config/calendar.json`。使用其他路径时，在 shell 中 `export PKU_CONFIG_PATH=...`；配置在构建时载入，改变校历后需要重新部署。
+推荐使用一键初始化。可以与已经部署的 GitHub Pages 同时使用。准备好本地 `.env`、校历和私密课程确认列表后，在 Cloudflare 注册账号，并在 **Workers & Pages** 中完成 `workers.dev` 子域名设置。首次在本机登录：
+
+```sh
+npx wrangler login
+```
+
+在项目根目录运行：
+
+```sh
+npm run worker:setup -- --deploy
+```
+
+`--deploy` 表示创建或更新云端资源、上传北大凭据并实际部署。命令会：
+
+1. 读取 `.env`（系统环境变量优先）、`config/calendar.json` 和所选时间表，校验凭据是否填写、学期绑定、有效期及私密课程确认列表，再做 Wrangler 不发布构建。公共校历不得包含 `unscheduledCourses` 字段；文件形式的私密列表会转换为 JSON 内容。
+2. 检查 Wrangler 登录并确定目标账号，默认使用 `wrangler.jsonc` 的 Worker 名称 `pku2cal`。多个账号时需用 `--account <账号 ID>` 明确指定，可先运行 `npx wrangler whoami` 查看。账号选择优先级为 `--account`、`CLOUDFLARE_ACCOUNT_ID`、Wrangler 的 `account_id`、唯一可访问账号。支持 Wrangler OAuth 登录或 `CLOUDFLARE_API_TOKEN`；不支持全局 API Key 登录。
+3. 首次生成独立于 Pages 的 32 字节随机令牌，在任何云端写入前以 `0600` 权限原子保存到 `data/worker/<账号 ID>/<Worker 名称>.json`。创建或复用 `CALENDAR_KV`，随后保存 namespace ID。重复运行复用令牌和缓存，不改变订阅地址。
+4. 自动生成忽略的本地部署配置 `data/worker/<账号 ID>/<Worker 名称>.wrangler.json`，无需手填 namespace ID。通过 Wrangler 将代码和四个 Secrets 一起部署：`PKU_USERNAME`、`PKU_PASSWORD`、`PKU_UNSCHEDULED_COURSES`、`CALENDAR_TOKEN`。无确认项时写入 `[]`，清除远端旧列表；不会上传整个 `.env` 或 Pages 令牌。
+5. 检查云端 `workers.dev` 路由，使用 GET 请求验证日历格式、`fresh` 缓存状态、生成时间及错误令牌 `404`；验证成功后在本机输出完整订阅 URL。验证仅在内存读取 ICS，不打印或保存课表。
+
+订阅地址形如 `https://pku2cal.<你的子域名>.workers.dev/calendar/<令牌>.ics`。**持有完整地址即可访问课表，请保密。** 一键初始化仅供本机使用，拒绝在 CI 中运行；不要求先推送 GitHub，也不修改已有 Pages。
+
+修改代码、校历、时间表、密码或课程确认列表后，重新运行同一命令即可。默认校历路径可通过 `.env` 或系统环境变量 `PKU_CONFIG_PATH` 覆盖。校历和时间表在构建时嵌入，改变后需重新部署。想用其他 Worker 名称，可运行：
+
+```sh
+npm run worker:setup -- --deploy --account <账号ID> --name pku2cal-test
+```
+
+请备份 `data/worker/` 中含令牌的状态 JSON。云端已有令牌而本地文件缺失时，命令会停止；可恢复状态文件，或显式更换订阅地址：
+
+```sh
+npm run worker:setup -- --deploy --rotate-token
+```
+
+轮换成功后旧地址返回 `404`，需更新客户端订阅。若轮换中途失败，使用普通 `--deploy` 重试，复用已保存的新令牌；不要再次附加 `--rotate-token`。损坏的状态文件不会自动覆盖；本地、配置和云端 KV 冲突或原 namespace 消失时会停止，不自动创建替代缓存。同名 Worker 若缺少本项目的 KV／Secrets 绑定也会停止，避免覆盖其他应用。
+
+中途失败会报告所在阶段，已经创建的资源和本地状态保留，供修复后重跑；不删除资源、不自动回滚。部署后云端验证最多尝试六次，每次 HTTP 请求超时 30 秒，间隔 5 秒；Wrangler 每条命令最多等待三分钟。**部署成功但验证失败时会明确报错**，可能需要排查云端访问北大、账号登录、学期或课程确认。缓存为 `stale` 不算本次验证成功；订阅客户端显示仍需实际验收。
+
+临时 Secrets 和 Wrangler 日志保存在权限受限的 `data/worker/.run-*` 目录，正常结束或报错时清理；Cloudflare 认证信息不进入长期状态文件。命令使用 `data/worker/setup.lock` 防止本机并发初始化。若进程被强制终止，请先确认没有运行中的任务，再删除遗留锁及 `.run-*` 临时目录后重试。
+
+一键初始化目前面向默认 `workers.dev` 部署，关闭预览 URL 和 observability；不支持 Wrangler 的自定义域名、环境及额外绑定配置。它读取仓库的运行时配置并生成本地部署文件，原 `wrangler.jsonc` 不会被自动改写。`npm run worker:deploy` 仍是下面手动流程的底层命令，不读取一键初始化保存的配置；日常更新请继续使用 `worker:setup -- --deploy`。
+
+### 手动部署
+
+也可以手动准备校历 `config/calendar.json`。使用其他路径时，在 shell 中 `export PKU_CONFIG_PATH=...`；配置在构建时载入，改变校历后需要重新部署。
 
 ```sh
 npx wrangler login
@@ -279,7 +323,7 @@ npm run worker:check
 
 `check` 包含类型检查、构建、单元测试和双运行时集成测试。`worker:check` 使用合成配置运行 Wrangler dry-run，不加载本地凭据、不发布。Miniflare 与 Wrangler 使用匹配的 Worker 运行时，依赖以锁文件为准。CI 已配置两种系统的同一套检查。
 
-已完成 2026–2027 秋季学期在 Node.js 与本地 Worker 的真实日历生成及事件一致性验证。Cloudflare 云端部署、公开 Pages 发布、日历客户端显示及远端 CI 仍待验证，详见[验证记录](docs/verification.md)。
+已完成 2026–2027 秋季学期在 Node.js 与本地 Worker 的真实日历生成及事件一致性验证。用户已确认完成 GitHub Pages 部署；Cloudflare 云端部署、日历客户端显示及远端 CI 结果仍待独立验证，详见[验证记录](docs/verification.md)。
 
 - [开发约定](AGENTS.md)：开发边界、数据处理与维护约定。
 - [系统设计](docs/design.md)：技术路线、模块边界、日历规则与验收要求。

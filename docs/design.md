@@ -96,6 +96,18 @@ workflow 使用 configure-pages 的 base_url 支持实际项目路径和自定�
 
 初始化可重复执行，不自动提交／推送、修改组织策略或绕过部署审批，不代替 CI 或日历客户端验收。失败保留已完成的配置并报告阶段，不尝试删除站点或回滚无法读取的旧 Secrets；已经开启的发布保持开启，等待超时不取消远端任务。
 
+**Worker 部署初始化**：`npm run worker:setup -- --deploy` 在本机读取 `.env`、公共校历、所选时间表及私密确认列表；先验证学期与配置并执行不发布构建，再确定 Cloudflare 账号、Worker 和资源。它从本地构建发布，不依赖 GitHub 提交／推送状态。`--account` 优先于 `CLOUDFLARE_ACCOUNT_ID`、Wrangler `account_id` 和唯一可访问账号；`--name` 可覆盖 Worker 名称。入口只支持默认 workers.dev 部署，拒绝自定义环境、域名及额外 Wrangler 配置，关闭预览 URL。
+
+部署职责分为 `entrypoints/worker-setup`（编排、公共配置生成及本机锁）、`worker-state`（私密状态验证和原子写入）与 `worker-cloudflare`（受控 Wrangler 子进程、Cloudflare 配置读取及 HTTP 验证）。Wrangler JSONC 使用 jsonc-parser 解析。认证、课表生成和 Worker HTTP 运行逻辑不依赖这些部署模块。
+
+初始化通过 Wrangler `whoami --json`、`auth token --json` 使用已有 OAuth／API Token 登录，不解析 Wrangler 私有凭据存储格式（[官方命令说明](https://developers.cloudflare.com/workers/wrangler/commands/general/)）。Cloudflare REST API 仅用于读取账号子域名、Worker bindings 与 workers.dev 启用状态；请求固定 API origin、拒绝重定向、30 秒超时，并隐藏原始错误。KV 的分页查询与创建、代码和 Secrets 发布均通过项目锁定版本的 Wrangler CLI 完成；部署固定目标账号和认证令牌。代码与 Secrets 同次发布使用官方 [`--secrets-file` 接口](https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code)。
+
+首次随机令牌与 Pages 独立，以 `0600` 权限原子保存到忽略的 `data/worker/<account>/<name>.json`，字段为 `accountId`、`name`、`token` 和可选 `namespaceId`；令牌必须先于任何云端写入保存。KV 创建后补全 namespace ID。命令重跑复用 KV 和令牌；若创建响应丢失，本地已有状态时可按确定名称 `<name>-CALENDAR_KV` 恢复。没有本地状态时不自动接管同名 KV。远端已有订阅令牌而本地状态缺失时停止，要求恢复文件或显式 `--rotate-token`；损坏文件始终停止。本地、公开配置与远端 KV 冲突或 namespace 不可访问时停止，不替换缓存。
+
+部署配置保存在同目录的 `<name>.wrangler.json`，运行时设置来自受验证的仓库 Wrangler 配置，构建 cwd 与主入口使用绝对路径；长期文件不包含密码或个人确认列表。一次部署将四个 Secrets 通过受限权限临时 JSON 交给 `wrangler deploy --secrets-file`；无课程确认项时显式同步 `[]`。Wrangler 子进程不继承 PKU／Pages 私密变量、调试选项、隐式 Cloudflare 环境或 API 地址覆盖；只向构建提供公共校历路径。临时 Secrets 与可能包含认证 stdout 的 Wrangler 日志均置于私密运行目录，正常完成或异常退出时清理，不转发原始子进程输出。强制终止可能残留临时目录和本机锁，需人工确认没有运行任务后清理。
+
+部署成功后检查 workers.dev 路由，并用有界重试验证 GET 返回可解析 ICS、`fresh` 状态、Last-Modified、no-store，以及错误令牌 404；只在验证通过后输出完整订阅地址。验证失败与部署失败区分报告，保留已部署资源，不宣称完成云端验收，也不自动回滚。初始化拒绝 CI，以免完整订阅地址进入公共日志；macOS／Linux CI 只使用合成输入执行测试和两种部署配置的 dry-run。
+
 **动态入口**：`GET /calendar/<token>.ics` 使用 Secret 中的长随机令牌校验，错误令牌返回 `404`。持有完整地址即可读取日历，令牌轮换后需重新配置订阅。
 
 KV 保存最近成功的 ICS、生成时间和配置指纹，按账号、学期及有效配置隔离。成功版本不足 6 小时直接返回；过期或不存在时请求触发刷新，成功才替换副本。刷新失败返回同一配置下的旧版并标示其生成时间；无可用副本时返回 `503`，不能返回空日历。旧版不因超过刷新周期而删除。合并同一 Worker 实例内的并发刷新，不假设 KV 提供全局锁。
