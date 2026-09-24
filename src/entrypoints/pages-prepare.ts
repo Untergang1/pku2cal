@@ -2,10 +2,13 @@ import { appendFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { calendarIdentity } from '../calendar/compare.js';
-import { configWithPrivateConfirmations, validateConfig, TimetableConfigError } from '../application/config.js';
+import { errorCategory } from '../application/log.js';
+import { SupplementError } from '../schedule/supplements.js';
+import { configWithPrivateSupplements, configWithPrivateConfirmations, validateConfig, TimetableConfigError } from '../application/config.js';
 import { generateCalendar, type GeneratedCalendar } from '../application/generate.js';
 import { assertGenerationAllowed } from '../application/semester.js';
 import { resolveCalendarConfig } from './calendar-config.js';
+import { readPrivateSupplements } from './private-supplements.js';
 import { readPrivateConfirmations } from './node.js';
 import { savePagesState, subscriptionUrl, validatePagesToken } from './pages-state.js';
 
@@ -52,7 +55,8 @@ export async function main(): Promise<void> {
     if (!['true', 'false'].includes(force)) throw new Error();
     const confirmations = await readPrivateConfirmations(process.env.PKU_UNSCHEDULED_COURSES, process.env.PKU_UNSCHEDULED_COURSES_FILE);
     const selected = await resolveCalendarConfig(JSON.parse(await readFile('config/calendar.json', 'utf8')));
-    const config = configWithPrivateConfirmations(selected.config, confirmations);
+    const supplements = await readPrivateSupplements(process.env.PKU_COURSE_SUPPLEMENTS, process.env.PKU_COURSE_SUPPLEMENTS_FILE);
+    const config = configWithPrivateSupplements(configWithPrivateConfirmations(selected.config, confirmations), supplements);
     const decision = await preparePages({
       token, baseUrl: process.env.PAGES_BASE_URL ?? '', force: force === 'true', directory: resolve('site'),
       generate: () => generateCalendar(config, { username: process.env.PKU_USERNAME ?? '', password: process.env.PKU_PASSWORD ?? '' }, { fetch, now: () => new Date() }),
@@ -62,6 +66,8 @@ export async function main(): Promise<void> {
     console.log(`Pages check: ${decision.reason}`);
   } catch (error) {
     if (error instanceof TimetableConfigError) console.error(error.guidance);
+    console.error(`生成错误类别：${errorCategory(error)}`);
+    if (error instanceof SupplementError) console.error('请复核私密课程补充配置，移除与系统课程或其他配置重复的课程及重复时段。');
     console.error('Pages 检查失败：请检查配置、令牌、校历有效期、上游获取及线上日历响应；本次未上传或部署。');
     process.exitCode = 1;
   }

@@ -42,6 +42,7 @@ jobs:
           PKU_USERNAME: ${{ secrets.PKU_USERNAME }}
           PKU_PASSWORD: ${{ secrets.PKU_PASSWORD }}
           PKU_UNSCHEDULED_COURSES: ${{ secrets.PKU_UNSCHEDULED_COURSES }}
+          PKU_COURSE_SUPPLEMENTS: ${{ secrets.PKU_COURSE_SUPPLEMENTS }}
       - name: Calendar unchanged
         if: ${{ steps.prepare.outputs.changed == 'false' }}
         run: node -e "console.log('Calendar unchanged; keeping the current deployment.')"

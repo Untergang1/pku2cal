@@ -5,9 +5,10 @@ import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import { z } from 'zod';
-import { configWithPrivateConfirmations, TimetableConfigError } from '../application/config.js';
+import { configWithPrivateSupplements, configWithPrivateConfirmations, TimetableConfigError } from '../application/config.js';
 import { assertGenerationAllowed } from '../application/semester.js';
 import { resolveCalendarConfig } from './calendar-config.js';
+import { readPrivateSupplements } from './private-supplements.js';
 import { cloudflareId, newWorkerToken, saveWorkerFile, workerName, workerState } from './worker-state.js';
 import { cloudflareReader, verifyWorker, workerCommand, WorkerSetupError, type WorkerCommand } from './worker-cloudflare.js';
 
@@ -65,10 +66,12 @@ export async function setupWorker(options: WorkerSetupOptions, d: WorkerSetupDep
     const confirmationFile = d.env.PKU_UNSCHEDULED_COURSES_FILE;
     if (confirmationFile?.trim() && d.env.PKU_UNSCHEDULED_COURSES?.trim()) throw new Error();
     const confirmations = confirmationFile?.trim() ? await d.read(resolve(confirmationFile)) : d.env.PKU_UNSCHEDULED_COURSES;
-    const effective = configWithPrivateConfirmations(config, confirmations);
+    const supplements = await readPrivateSupplements(d.env.PKU_COURSE_SUPPLEMENTS, d.env.PKU_COURSE_SUPPLEMENTS_FILE, d.read);
+    const effective = configWithPrivateSupplements(configWithPrivateConfirmations(config, confirmations), supplements);
     if (!d.env.PKU_USERNAME?.trim() || !d.env.PKU_PASSWORD?.trim()) throw new Error();
     const secrets: Record<string, string> = { PKU_USERNAME: d.env.PKU_USERNAME, PKU_PASSWORD: d.env.PKU_PASSWORD,
-      PKU_UNSCHEDULED_COURSES: JSON.stringify(effective.unscheduledCourses ?? []) };
+      PKU_UNSCHEDULED_COURSES: JSON.stringify(effective.unscheduledCourses ?? []),
+      PKU_COURSE_SUPPLEMENTS: JSON.stringify(effective.courseSupplements ?? null) };
     const temporaryConfig = resolve(d.directory, 'wrangler.json');
     const secretPath = resolve(d.directory, 'secrets.json');
     const buildEnv = { PKU_CONFIG_PATH: configPath };
@@ -167,7 +170,7 @@ export async function setupWorker(options: WorkerSetupOptions, d: WorkerSetupDep
   } catch (error) {
     const detail = error instanceof WorkerSetupError ? error.message
       : error instanceof TimetableConfigError ? error.guidance
-      : '请检查本地配置、学期有效期、私密确认列表及 Cloudflare 响应；详细私密内容不输出。';
+      : '请检查本地配置、学期有效期、私密确认列表、课程补充配置及 Cloudflare 响应；详细私密内容不输出。';
     throw new WorkerSetupError(`Worker 初始化失败（${stage}）：${detail}${deployed ? ' 已完成部署，不会自动回滚。' : ''}`);
   }
 }
@@ -194,7 +197,7 @@ export async function main(): Promise<void> {
       deploy: { type: 'boolean' }, 'rotate-token': { type: 'boolean' }, account: { type: 'string' }, name: { type: 'string' }, help: { type: 'boolean' },
     } });
     if (values.help) {
-      console.log('用法：npm run worker:setup -- --deploy [--account <账号 ID>] [--name <Worker 名称>] [--rotate-token]\n先运行 npx wrangler login，并在 Cloudflare Workers & Pages 中设置 workers.dev 子域名。\n读取 .env、校历和私密确认列表；创建或复用 KV，保存令牌，部署代码和 Secrets，验证后输出订阅地址。\n重复运行更新部署；轮换失败后不带 --rotate-token 重试。请备份 data/worker 中的状态 JSON。');
+      console.log('用法：npm run worker:setup -- --deploy [--account <账号 ID>] [--name <Worker 名称>] [--rotate-token]\n先运行 npx wrangler login，并在 Cloudflare Workers & Pages 中设置 workers.dev 子域名。\n读取 .env、校历和私密课程配置；创建或复用 KV，保存令牌，部署代码和 Secrets，验证后输出订阅地址。\n重复运行更新部署；轮换失败后不带 --rotate-token 重试。请备份 data/worker 中的状态 JSON。');
       return;
     }
     if (!values.deploy) throw new WorkerSetupError('请使用 npm run worker:setup -- --deploy；该命令会创建云端资源并部署。');

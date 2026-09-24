@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { configWithPrivateConfirmations, validateConfig, type CalendarConfig } from '../application/config.js';
+import { SupplementError } from '../schedule/supplements.js';
+import { configWithPrivateSupplements, configWithPrivateConfirmations, validateConfig, type CalendarConfig } from '../application/config.js';
 import { assertGenerationAllowed } from '../application/semester.js';
 import { generateCalendar, type GeneratedCalendar } from '../application/generate.js';
 import { errorCategory, logRecord, type Logger } from '../application/log.js';
@@ -14,6 +15,7 @@ export interface WorkerEnv {
   PKU_PASSWORD?: string;
   CALENDAR_TOKEN?: string;
   PKU_UNSCHEDULED_COURSES?: string;
+  PKU_COURSE_SUPPLEMENTS?: string;
   CALENDAR_KV: CalendarStore;
 }
 interface Snapshot extends GeneratedCalendar { fingerprint: string }
@@ -64,10 +66,10 @@ export function createWorker(config: unknown, dependencies: {
       let valid: CalendarConfig;
       try {
         if (!env.PKU_USERNAME?.trim() || !env.PKU_PASSWORD || !env.CALENDAR_KV) throw new Error();
-        valid = configWithPrivateConfirmations(config, env.PKU_UNSCHEDULED_COURSES);
+        valid = configWithPrivateSupplements(configWithPrivateConfirmations(config, env.PKU_UNSCHEDULED_COURSES), env.PKU_COURSE_SUPPLEMENTS);
         identity = cacheIdentity(valid, env.PKU_USERNAME);
-      } catch {
-        logger({ stage: 'configuration', category: 'invalid', durationMs: 0 });
+      } catch (error) {
+        logger({ stage: 'configuration', category: error instanceof SupplementError ? errorCategory(error) : 'invalid', durationMs: 0 });
         return unavailable();
       }
       const { key, fingerprint } = identity;

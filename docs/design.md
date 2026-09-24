@@ -25,12 +25,12 @@
 | `pku/auth` | IAAA 与选课系统 SSO；管理本次生成过程内的 Cookie 和重定向，不持久化会话 |
 | `pku/elective` | 获取课表 HTML；识别登录失效和上游请求失败 |
 | `pku/parser` | 校验页面结构，提取课程号、班号、课程名、教师、选课状态及分段时间文本，保留 `<br>` 边界 |
-| `schedule` | 将时间文本归一化为教学周集合、星期、起止节次和地点，再结合校历展开事件 |
+| `schedule` | 将上游时间文本归一化，合并私密教室覆盖与结构化手动课程，再结合校历展开事件 |
 | `calendar` | 将带稳定身份、起止时间和课程信息的事件序列化为 ICS，不接触 HTML |
 | `application` | 校验共用配置，编排课表获取、解析、校历展开与 ICS 生成流程 |
 | `entrypoints` | 读取配置与 Secrets、调用共用生成流程；分别负责文件输出或 KV 与 HTTP 行为 |
 
-解析、校历计算和序列化使用纯函数；网络请求与生成时间由外部传入，便于离线测试。只有确认选课成功的课程进入日历；不得把未知状态、缺失表格或无法识别的时间当作空课表。人工确认的无固定时间课程可通过显式标记不生成事件；未确认的异常仍使整次生成失败。
+解析、校历计算和序列化使用纯函数；网络请求与生成时间由外部传入，便于离线测试。上游课程只有确认选课成功才进入日历；人工添加的缺失课程由私密补充配置显式提供。不得把未知状态、缺失表格或无法识别的时间当作空课表。人工确认的无固定时间课程可通过显式标记不生成事件；未确认的异常仍使整次生成失败。
 
 ### 目录布局
 
@@ -78,6 +78,17 @@ docs/            # 系统设计、参考资料及验证记录
 
 无固定时间课程使用 `unscheduledCourses` 确认列表：每项包含学期、课程号、班号、`confirmed: true` 和完整 `expectedSegments`。只跳过匹配且说明未改变的课程；可解析的固定时段不能标记为无固定时间。确认列表属于个人选课数据，来自忽略的本地校历、Node 私密 JSON 文件（`--confirmations` 或 `PKU_UNSCHEDULED_COURSES_FILE`），或 `PKU_UNSCHEDULED_COURSES` 环境变量／Secret；多个来源冲突时报错。文件读取留在 Node 入口，Worker 使用运行时 Secret。确认项与校历一起组成有效配置指纹。Worker 构建不打包非空个人列表。列表中的课程退选后可正常生成完整快照。
 
+### 私密课程补充
+
+`PKU_COURSE_SUPPLEMENTS` 是独立于无固定时间确认列表的 JSON 对象，包含当前 `semester`、`locations` 和 `courses` 数组；未设置、空白、`null` 或当前学期的空数组配置归一为不启用。Node 支持 `PKU_COURSE_SUPPLEMENTS_FILE` 及优先的 `--supplements` 路径；文件和非空内联值互斥。结构和使用示例见 [README](../README.md#私密课程补充配置)。公共 `CalendarSourceConfig` 拒绝 `courseSupplements`，只有解析后的运行配置可以携带该字段，因此个人补充不会进入 Worker 构建产物。
+
+`schedule/supplements` 校验并规范化私密配置，按课程号和班号覆盖已有课程所有时段的教室，或者添加整门缺失课程。上游分段文本解析成 `Slot`，手动时段由结构化星期、节次、教学周范围和单双周直接转换成同一结构；随后统一使用 `schedule/expand` 的节次映射、停补课和 UID 规则。新增来源不进入 UID，修改教室不改变身份。已有课程时间替换、增加时段和按时段覆盖教室均不支持。
+
+新增课程身份与上游已选课程、无固定时间确认或教室覆盖重复时报 `supplements:conflict`；无匹配上游课程的教室覆盖忽略。重复手动事件报 `supplements:duplicate`；非法私密来源、字段、学期、周数及缺失节次报 `supplements:invalid`。不同课程允许时间重叠。上游完整性检查不被补充配置绕过；失败沿用原子写入及旧部署保留行为，日志只输出固定错误类别。
+
+Pages 准备入口和 Worker 运行时合并同一有效配置。一键初始化将新增 `PKU_COURSE_SUPPLEMENTS` Secret 与其他 Secrets 一起同步，上传内容而非文件路径，未启用时显式上传 `null` 清除旧值。Worker 对规范化补充内容计算配置指纹：课程、教室和时段数组排序不影响指纹，内容变更隔离缓存；无补充时不增加字段，保留原指纹。新配置首次生成失败时不跨配置读取缓存，有同配置副本则可返回 stale，无副本返回 503。
+
+
 ## 4. 运行入口与失败处理
 
 **静态入口**：本地生成 ICS；Actions 每天北京时间 06:17（UTC `17 22 * * *`）检查并支持手动触发。Pages 通过 `<token>/calendar.ics` 提供固定随机订阅地址，持有链接即可访问。仅在内容变化、首次返回 404 或 `force_publish=true` 时上传并部署；无变化时保留现有线上文件。artifact 显式保留一天，不提交源码或另存缓存基准。公开仓库的 artifact 在有效期内可被有读取权限的登录用户下载，这一边界不会因 Secret 遮蔽而改变。
@@ -92,7 +103,7 @@ workflow 使用 configure-pages 的 base_url 支持实际项目路径和自定�
 
 初始化前置检查完成后从 `data/pages/<owner>/<repo>.json` 读取令牌（仓库名小写）。首次以 32 字节安全随机数生成 base64url 令牌，原子保存，文件权限为 0600；远端已有 PAGES_CALENDAR_TOKEN 而本地缺失时停止，要求恢复文件或显式轮换。损坏文件不自动覆盖。`--rotate-token` 保存新令牌并强制发布，失败后普通重跑复用新值；`--force-publish` 仅强制发布。令牌与 Worker 的 CALENDAR_TOKEN 独立。
 
-初始化先查询 Pages：仅 HTTP 404 作为未创建处理，其他错误停止；已有站点仅更新发布来源。随后通过子进程标准输入上传四个所需 Secrets（包括 PAGES_CALENDAR_TOKEN）（无确认项时写入 `[]`），启用工作流、复核远端提交、设置发布变量，使用 [GitHub REST API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) `2026-03-10` 触发发布并获取返回的运行 ID。仅跟踪该 ID，核对其提交、运行结论及 generate/deploy 两个任务。接受 generate 与 deploy 均成功，或 generate 成功、Calendar unchanged 步骤成功且 deploy 跳过；强制发布或轮换时不接受跳过。根据 Pages API 实际站点地址和令牌构造订阅 URL，仅在本机结果中显示；禁止在 Actions 中运行初始化。每次子进程限时 60 秒，发布轮询限时 15 分钟。不会读取生成的个人 ICS 或打印远端原始错误；子进程移除私密课表环境变量和 gh 调试开关，Secrets 不进入参数或日志。
+初始化先查询 Pages：仅 HTTP 404 作为未创建处理，其他错误停止；已有站点仅更新发布来源。随后通过子进程标准输入上传五个所需 Secrets（包括 PAGES_CALENDAR_TOKEN 和 PKU_COURSE_SUPPLEMENTS；无确认项时写入 `[]`，无补充时写入 `null`），启用工作流、复核远端提交、设置发布变量，使用 [GitHub REST API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) `2026-03-10` 触发发布并获取返回的运行 ID。仅跟踪该 ID，核对其提交、运行结论及 generate/deploy 两个任务。接受 generate 与 deploy 均成功，或 generate 成功、Calendar unchanged 步骤成功且 deploy 跳过；强制发布或轮换时不接受跳过。根据 Pages API 实际站点地址和令牌构造订阅 URL，仅在本机结果中显示；禁止在 Actions 中运行初始化。每次子进程限时 60 秒，发布轮询限时 15 分钟。不会读取生成的个人 ICS 或打印远端原始错误；子进程移除私密课表环境变量和 gh 调试开关，Secrets 不进入参数或日志。
 
 初始化可重复执行，不自动提交／推送、修改组织策略或绕过部署审批，不代替 CI 或日历客户端验收。失败保留已完成的配置并报告阶段，不尝试删除站点或回滚无法读取的旧 Secrets；已经开启的发布保持开启，等待超时不取消远端任务。
 
@@ -104,7 +115,7 @@ workflow 使用 configure-pages 的 base_url 支持实际项目路径和自定�
 
 首次随机令牌与 Pages 独立，以 `0600` 权限原子保存到忽略的 `data/worker/<account>/<name>.json`，字段为 `accountId`、`name`、`token` 和可选 `namespaceId`；令牌必须先于任何云端写入保存。KV 创建后补全 namespace ID。命令重跑复用 KV 和令牌；若创建响应丢失，本地已有状态时可按确定名称 `<name>-CALENDAR_KV` 恢复。没有本地状态时不自动接管同名 KV。远端已有订阅令牌而本地状态缺失时停止，要求恢复文件或显式 `--rotate-token`；损坏文件始终停止。本地、公开配置与远端 KV 冲突或 namespace 不可访问时停止，不替换缓存。
 
-部署配置保存在同目录的 `<name>.wrangler.json`，运行时设置来自受验证的仓库 Wrangler 配置，构建 cwd 与主入口使用绝对路径；长期文件不包含密码或个人确认列表。一次部署将四个 Secrets 通过受限权限临时 JSON 交给 `wrangler deploy --secrets-file`；无课程确认项时显式同步 `[]`。Wrangler 子进程不继承 PKU／Pages 私密变量、调试选项、隐式 Cloudflare 环境或 API 地址覆盖；只向构建提供公共校历路径。临时 Secrets 与可能包含认证 stdout 的 Wrangler 日志均置于私密运行目录，正常完成或异常退出时清理，不转发原始子进程输出。强制终止可能残留临时目录和本机锁，需人工确认没有运行任务后清理。
+部署配置保存在同目录的 `<name>.wrangler.json`，运行时设置来自受验证的仓库 Wrangler 配置，构建 cwd 与主入口使用绝对路径；长期文件不包含密码或个人确认列表。一次部署将五个 Secrets 通过受限权限临时 JSON 交给 `wrangler deploy --secrets-file`；无课程确认项时显式同步 `[]`，无课程补充时显式同步 `null`。Wrangler 子进程不继承 PKU／Pages 私密变量、调试选项、隐式 Cloudflare 环境或 API 地址覆盖；只向构建提供公共校历路径。临时 Secrets 与可能包含认证 stdout 的 Wrangler 日志均置于私密运行目录，正常完成或异常退出时清理，不转发原始子进程输出。强制终止可能残留临时目录和本机锁，需人工确认没有运行任务后清理。
 
 部署成功后检查 workers.dev 路由，并用有界重试验证 GET 返回可解析 ICS、`fresh` 状态、Last-Modified、no-store，以及错误令牌 404；只在验证通过后输出完整订阅地址。验证失败与部署失败区分报告，保留已部署资源，不宣称完成云端验收，也不自动回滚。初始化拒绝 CI，以免完整订阅地址进入公共日志；macOS／Linux CI 只使用合成输入执行测试和两种部署配置的 dry-run。
 

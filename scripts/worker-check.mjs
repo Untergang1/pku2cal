@@ -30,7 +30,7 @@ if (process.exitCode === 0) {
     const secretsPath = resolve(directory, 'secrets.json');
     await saveWorkerFile(configPath, JSON.stringify(config));
     await saveWorkerFile(secretsPath, JSON.stringify({ PKU_USERNAME: 'synthetic', PKU_PASSWORD: 'synthetic',
-      PKU_UNSCHEDULED_COURSES: '[]', CALENDAR_TOKEN: 't'.repeat(43) }));
+      PKU_UNSCHEDULED_COURSES: '[]', PKU_COURSE_SUPPLEMENTS: 'null', CALENDAR_TOKEN: 't'.repeat(43) }));
     await workerCommand(directory, { ...process.env, XDG_CONFIG_HOME: configDirectory })([
       'deploy', '--dry-run', '--config', configPath, '--secrets-file', secretsPath, '--outdir', resolve(directory, 'output'),
     ], { PKU_CONFIG_PATH: resolve('config/calendar.example.json') });

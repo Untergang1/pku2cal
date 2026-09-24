@@ -1,3 +1,4 @@
+import { supplements } from '../fixtures/supplements.js';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -100,7 +101,7 @@ it('creates a Worker with a persistent independent token, JSON secrets, pinned a
   f.files.set(resolve('data/synthetic-confirmations.json'), JSON.stringify(decisions));
   const url = await setupWorker({ deploy: true }, f.d);
   expect(url).toBe(`https://pku2cal.synthetic.workers.dev/calendar/${token}.ics`);
-  expect(f.uploaded()).toEqual({ PKU_USERNAME: 'synthetic-user', PKU_PASSWORD: 'synthetic-password', CALENDAR_TOKEN: token, PKU_UNSCHEDULED_COURSES: JSON.stringify(decisions) });
+  expect(f.uploaded()).toEqual({ PKU_USERNAME: 'synthetic-user', PKU_PASSWORD: 'synthetic-password', CALENDAR_TOKEN: token, PKU_UNSCHEDULED_COURSES: JSON.stringify(decisions), PKU_COURSE_SUPPLEMENTS: 'null' });
   expect(workerState.parse(JSON.parse(f.files.get(statePath)!)).namespaceId).toBe(namespace);
   const config = JSON.parse(f.files.get(`data/worker/${account}/pku2cal.wrangler.json`)!);
   expect(config).toMatchObject({ account_id: account, workers_dev: true, preview_urls: false, kv_namespaces: [{ binding: 'CALENDAR_KV', id: namespace }], observability: { enabled: false } });
@@ -319,4 +320,27 @@ it('persists private state atomically with 0600 permissions and no temporary res
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect(await readdir(directory)).toEqual(['state.json']);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+
+it('uploads supplements privately and clears them with null on a later setup', async () => {
+  const f = fixture();
+  f.d.env.PKU_COURSE_SUPPLEMENTS_FILE = 'data/synthetic-supplements.json';
+  f.files.set(resolve('data/synthetic-supplements.json'), JSON.stringify(supplements));
+  await setupWorker({ deploy: true }, f.d);
+  expect(JSON.parse(f.uploaded()!.PKU_COURSE_SUPPLEMENTS!)).toEqual(supplements);
+  expect(f.logs.join('\n')).not.toMatch(/SYN003|合成单周课程|手动教室/);
+  expect(f.files.get(`data/worker/${account}/pku2cal.wrangler.json`)).not.toContain('SYN003');
+  delete f.d.env.PKU_COURSE_SUPPLEMENTS_FILE;
+  await setupWorker({ deploy: true }, f.d);
+  expect(f.uploaded()?.PKU_COURSE_SUPPLEMENTS).toBe('null');
+});
+
+it('rejects competing supplement sources before invoking Wrangler or Cloudflare', async () => {
+  const f = fixture();
+  f.d.env.PKU_COURSE_SUPPLEMENTS = JSON.stringify(supplements);
+  f.d.env.PKU_COURSE_SUPPLEMENTS_FILE = 'data/synthetic-supplements.json';
+  await expect(setupWorker({ deploy: true }, f.d)).rejects.toThrow('本地配置');
+  expect(f.calls).toEqual([]);
+  expect(f.requests).toEqual([]);
 });

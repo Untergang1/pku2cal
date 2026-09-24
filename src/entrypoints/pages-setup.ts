@@ -5,9 +5,10 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
-import { configWithPrivateConfirmations, TimetableConfigError } from '../application/config.js';
+import { configWithPrivateSupplements, configWithPrivateConfirmations, TimetableConfigError } from '../application/config.js';
 import { assertGenerationAllowed } from '../application/semester.js';
 import { resolveCalendarConfig } from './calendar-config.js';
+import { readPrivateSupplements } from './private-supplements.js';
 import { readPrivateConfirmations } from './node.js';
 import { newPagesToken, savePagesState, subscriptionUrl, validatePagesToken } from './pages-state.js';
 
@@ -116,16 +117,18 @@ export async function setupPages(publish: boolean, d: PagesDependencies, options
     // Even an empty property is rejected to keep the public/private boundary explicit.
     if (config.unscheduledCourses !== undefined || !config.semesterBinding) throw new Error();
     assertGenerationAllowed(config, d.now());
-    const effective = configWithPrivateConfirmations(config, await d.confirmations());
+    const supplements = await readPrivateSupplements(d.env.PKU_COURSE_SUPPLEMENTS, d.env.PKU_COURSE_SUPPLEMENTS_FILE, d.read);
+    const effective = configWithPrivateSupplements(configWithPrivateConfirmations(config, await d.confirmations()), supplements);
     const username = d.env.PKU_USERNAME;
     const password = d.env.PKU_PASSWORD;
     if (!username?.trim() || !password?.trim()) throw new Error();
     secrets = { PKU_USERNAME: username, PKU_PASSWORD: password,
-      PKU_UNSCHEDULED_COURSES: JSON.stringify(effective.unscheduledCourses ?? []) };
+      PKU_UNSCHEDULED_COURSES: JSON.stringify(effective.unscheduledCourses ?? []),
+      PKU_COURSE_SUPPLEMENTS: JSON.stringify(effective.courseSupplements ?? null) };
   } catch (error) {
     if (error instanceof TimetableConfigError) throw new PagesSetupError(error.guidance);
     if (error instanceof PagesSetupError) throw error;
-    throw new PagesSetupError('本地配置无效：检查 .env 中的账号密码、私密确认列表，以及公共校历的学期绑定和有效期；公共校历不得包含 unscheduledCourses。');
+    throw new PagesSetupError('本地配置无效：检查 .env 中的账号密码、私密确认列表和课程补充配置，以及公共校历的学期绑定和有效期；公共校历不得包含 unscheduledCourses 或 courseSupplements。');
   }
   await api('/actions/workflows/pages.yml');
   const pagesSchema = z.object({ build_type: z.enum(['legacy', 'workflow']), html_url: z.string().url() });

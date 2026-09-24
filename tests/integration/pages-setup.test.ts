@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+import { supplements } from '../fixtures/supplements.js';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -171,7 +173,7 @@ it.each(['missing', 'legacy', 'workflow'] as const)('configures a %s Pages site 
     expect(JSON.parse(siteWrites[0].input!)).toEqual({ build_type: 'workflow' });
   }
   const secrets = f.writes().filter(c => c.args[0] === 'secret');
-  expect(secrets.map(c => c.args[2])).toEqual(['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES', 'PAGES_CALENDAR_TOKEN']);
+  expect(secrets.map(c => c.args[2])).toEqual(['PKU_USERNAME', 'PKU_PASSWORD', 'PKU_UNSCHEDULED_COURSES', 'PKU_COURSE_SUPPLEMENTS', 'PAGES_CALENDAR_TOKEN']);
   expect(secrets[1]!.input).toBe('synthetic-password');
   expect(JSON.parse(secrets[2]!.input!)).toEqual(confirmation);
   for (const c of secrets) expect(c.args).toContain('calendar-owner/calendar');
@@ -313,4 +315,24 @@ it('rejects the unfilled SS table before uploading secrets or changing GitHub se
   const f = fixture({ selectedTimetable: 'pku-ss' });
   await expect(setupPages(true, f.d)).rejects.toThrow('config/timetables/pku-ss.json');
   expect(f.calls.some(call => call.args.includes('--method') && call.args[call.args.indexOf('--method') + 1] !== 'GET')).toBe(false);
+});
+
+
+it('uploads private supplements by content and clears them on a later setup', async () => {
+  const f = fixture();
+  f.d.env.PKU_COURSE_SUPPLEMENTS_FILE = 'data/synthetic-supplements.json';
+  f.saved.set(resolve('data/synthetic-supplements.json'), JSON.stringify(supplements));
+  await setupPages(true, f.d);
+  expect(JSON.parse(f.calls.find(c => c.args[2] === 'PKU_COURSE_SUPPLEMENTS')!.input!)).toEqual(supplements);
+  expect(f.logs.join('\n')).not.toMatch(/SYN003|合成单周课程|手动教室/);
+  delete f.d.env.PKU_COURSE_SUPPLEMENTS_FILE;
+  await setupPages(true, f.d);
+  expect(f.calls.filter(c => c.args[2] === 'PKU_COURSE_SUPPLEMENTS').at(-1)?.input).toBe('null');
+});
+
+it('rejects invalid supplements before changing GitHub state', async () => {
+  const f = fixture();
+  f.d.env.PKU_COURSE_SUPPLEMENTS = '{private-invalid-json';
+  await expect(setupPages(true, f.d)).rejects.toThrow('本地配置无效');
+  expect(f.writes()).toEqual([]);
 });

@@ -1,3 +1,4 @@
+import { supplements } from '../fixtures/supplements.js';
 import { generateKeyPairSync } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { workerRuntime } from './runtime.js';
@@ -6,7 +7,7 @@ import { generateFromHtml } from '../../src/application/generate.js';
 import { resolveCalendarConfig } from '../../src/entrypoints/calendar-config.js';
 import { cacheIdentity } from '../../src/entrypoints/worker.js';
 import type { CalendarStore } from '../../src/entrypoints/worker.js';
-import { configWithPrivateConfirmations } from '../../src/application/config.js';
+import { configWithPrivateSupplements, configWithPrivateConfirmations } from '../../src/application/config.js';
 
 it.each(['pku-main', 'pku-ss'])('starts the production deployment entry with resolved %s and serves its configured KV snapshot', async id => {
   const { periods, ...source } = config;
@@ -41,13 +42,15 @@ it.each([false, true])('runs the complete pipeline with workerd and KV (manual c
   const untimed = { courseId: 'SYN002', classId: '01', name: '合成无固定时间课程', teacher: '', segments: ['(无固定时间说明)'] };
   const confirmations = manual ? JSON.stringify([{ semester: config.semester, courseId: untimed.courseId, classId: untimed.classId, confirmed: true, expectedSegments: untimed.segments }]) : '';
   const html = manual ? timetable([{}, { course: untimed }], '学期课程表') : timetable();
-  const effective = configWithPrivateConfirmations(chosenConfig, confirmations);
+  const privateJson = manual ? JSON.stringify(supplements) : 'null';
+  const effective = configWithPrivateSupplements(configWithPrivateConfirmations(chosenConfig, confirmations), privateJson);
   const runtime = await workerRuntime('tests/fixtures/calendar-worker.ts', {
     PKU_USERNAME: { type: 'text', value: 'synthetic' }, PKU_PASSWORD: { type: 'text', value: 'synthetic-password' },
     CALENDAR_TOKEN: { type: 'text', value: token }, TEST_PUBLIC_KEY: { type: 'text', value: pem },
     CALENDAR_KV: { type: 'kv', id: 'synthetic' },
     TEST_CONFIG: { type: 'text', value: JSON.stringify(chosenConfig) }, TEST_HTML: { type: 'text', value: html },
     PKU_UNSCHEDULED_COURSES: { type: 'text', value: confirmations },
+    PKU_COURSE_SUPPLEMENTS: { type: 'text', value: privateJson },
   });
   try {
     const response = await runtime.dispatchFetch(`http://localhost/calendar/${token}.ics`);

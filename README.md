@@ -49,7 +49,7 @@ npm run generate
 - `status` 不登录账号，检查并显示所选时间表、学期和允许生成的日期状态。请核对学期是否正确。
 - `generate` 登录并读取课表，成功后生成 `data/calendar.ics`。生成失败会保留旧文件。
 
-仓库目前提供校本部 2026–2027 秋季学期配置。其他学期、校区或特殊课程安排请先核对并调整[校历与学期配置](#校历与学期配置)。如果课表包含无固定时间课程，需先[人工确认](#确认无固定时间课程)，再重新生成。
+仓库目前提供校本部 2026–2027 秋季学期配置。其他学期、校区或特殊课程安排请先核对并调整[校历与学期配置](#校历与学期配置)。教室缺失或系统漏列整门课程时，可使用[私密课程补充配置](#私密课程补充配置)。如果课表包含无固定时间课程，需先[人工确认](#确认无固定时间课程)，再重新生成。
 
 ### 4. 导入或订阅
 
@@ -75,12 +75,12 @@ npm run pages:setup -- --publish
 `--publish` 表示同意公开课表并立即检查，需要时发布。命令会：
 
 1. 检查 `gh` 登录、Git 工作区干净、`origin` 读取与推送地址指向同一 GitHub 仓库，以及本地 HEAD 与远端默认分支一致。命令不会自动提交或推送。
-2. 检查公共校历的学期绑定与生成有效期，读取本地凭据和私密课程确认列表。请先人工核对当前学期；该检查不登录北大，也不能验证密码是否正确。
+2. 检查公共校历的学期绑定与生成有效期，读取本地凭据、私密课程确认列表和课程补充配置。请先人工核对当前学期；该检查不登录北大，也不能验证密码是否正确。
 3. 首次生成 32 字节随机令牌，以 `0600` 权限原子保存到忽略的 `data/pages/<owner>/<repo>.json`（仓库名小写）；重复运行复用。随后创建 Pages 或切换其发布来源为 GitHub Actions，保留自定义域名等其他设置。
-4. 上传 `PKU_USERNAME`、`PKU_PASSWORD`、`PKU_UNSCHEDULED_COURSES` 及独立的 `PAGES_CALENDAR_TOKEN`，共四个 Actions Secrets。系统环境变量优先于 `.env`；文件形式的确认列表会上传 JSON 内容，不上传本地路径。没有确认项时上传 `[]`，替换远端旧列表。不会上传整个 `.env` 或 Worker 令牌。
+4. 上传 `PKU_USERNAME`、`PKU_PASSWORD`、`PKU_UNSCHEDULED_COURSES`、`PKU_COURSE_SUPPLEMENTS` 及独立的 `PAGES_CALENDAR_TOKEN`，共五个 Actions Secrets。系统环境变量优先于 `.env`；文件形式的私密配置会上传 JSON 内容，不上传本地路径。没有确认项时上传 `[]`，没有补充配置时上传 `null`，替换远端旧配置。不会上传整个 `.env` 或 Worker 令牌。
 5. 启用工作流，设置仓库变量 `PUBLISH_CALENDAR=true`，触发检查并跟踪本次运行。部署成功或明确确认课表未变化后，在本地输出实际 Pages 地址下的 `<令牌>/calendar.ics` 订阅 URL；支持自定义域名。
 
-命令仅支持 `github.com` 的标准 HTTPS／SSH `origin` 地址。需要账号拥有配置 Pages、Actions Secrets、Variables 和运行工作流的权限；组织策略或部署环境审批仍由 GitHub 控制。校历不得包含 `unscheduledCourses` 字段，个人确认项应使用 `.env` 中的私密来源。
+命令仅支持 `github.com` 的标准 HTTPS／SSH `origin` 地址。需要账号拥有配置 Pages、Actions Secrets、Variables 和运行工作流的权限；组织策略或部署环境审批仍由 GitHub 控制。校历不得包含 `unscheduledCourses` 或 `courseSupplements` 字段，个人确认项与课程补充应使用 `.env` 中的私密来源。
 
 可重复运行以更新 Secrets 并检查变化；默认最多等待 15 分钟。中途失败会报告所在阶段，已经完成的配置保留，已有站点和旧日历不会被删除；已经开启的定时发布不会自动关闭，超时也不会取消远端任务。修复后可以重跑。首次使用前建议确认推送触发的 Linux／macOS CI 通过；初始化命令不会等待或代替 CI。
 
@@ -100,7 +100,7 @@ npm run pages:setup -- --publish --rotate-token
 
 1. 将核实后的非私密校历保存为 `config/calendar.json`，与所选时间表一起提交。勿提交 `.env`、原始页面和 ICS。
 2. 在仓库 Actions Secrets 设置 `PKU_USERNAME`、`PKU_PASSWORD`。
-   如有已确认无固定时间课程，再设置 `PKU_UNSCHEDULED_COURSES` Secret。
+   如有已确认无固定时间课程，再设置 `PKU_UNSCHEDULED_COURSES` Secret；如有课程补充，设置 `PKU_COURSE_SUPPLEMENTS` Secret。
 3. 用 `npm run token` 生成并私密备份令牌，将其设置为 Actions Secret `PAGES_CALENDAR_TOKEN`；将 Pages 的发布来源设为 GitHub Actions。手动配置后若要改用一键初始化，应恢复对应的本地 JSON 文件（格式为 `{"repository":"owner/repo","token":"<令牌>"}`）或显式轮换。
 4. 确认课表可以公开访问后，设置仓库变量 `PUBLISH_CALENDAR=true`，手动运行 Generate calendar and publish Pages。
 5. 订阅 Pages 地址下的 `<令牌>/calendar.ics`；不要公开此地址。
@@ -115,7 +115,7 @@ npm run pages:setup -- --publish --rotate-token
 
 ## Cloudflare Worker
 
-推荐使用一键初始化。可以与已经部署的 GitHub Pages 同时使用。准备好本地 `.env`、校历和私密课程确认列表后，在 Cloudflare 注册账号，并在 **Workers & Pages** 中完成 `workers.dev` 子域名设置。首次在本机登录：
+推荐使用一键初始化。可以与已经部署的 GitHub Pages 同时使用。准备好本地 `.env`、校历、私密课程确认列表和课程补充配置后，在 Cloudflare 注册账号，并在 **Workers & Pages** 中完成 `workers.dev` 子域名设置。首次在本机登录：
 
 ```sh
 npx wrangler login
@@ -129,15 +129,15 @@ npm run worker:setup -- --deploy
 
 `--deploy` 表示创建或更新云端资源、上传北大凭据并实际部署。命令会：
 
-1. 读取 `.env`（系统环境变量优先）、`config/calendar.json` 和所选时间表，校验凭据是否填写、学期绑定、有效期及私密课程确认列表，再做 Wrangler 不发布构建。公共校历不得包含 `unscheduledCourses` 字段；文件形式的私密列表会转换为 JSON 内容。
+1. 读取 `.env`（系统环境变量优先）、`config/calendar.json` 和所选时间表，校验凭据是否填写、学期绑定、有效期及私密课程确认列表和课程补充配置，再做 Wrangler 不发布构建。公共校历不得包含 `unscheduledCourses` 或 `courseSupplements` 字段；文件形式的私密配置会转换为 JSON 内容。
 2. 检查 Wrangler 登录并确定目标账号，默认使用 `wrangler.jsonc` 的 Worker 名称 `pku2cal`。多个账号时需用 `--account <账号 ID>` 明确指定，可先运行 `npx wrangler whoami` 查看。账号选择优先级为 `--account`、`CLOUDFLARE_ACCOUNT_ID`、Wrangler 的 `account_id`、唯一可访问账号。支持 Wrangler OAuth 登录或 `CLOUDFLARE_API_TOKEN`；不支持全局 API Key 登录。
 3. 首次生成独立于 Pages 的 32 字节随机令牌，在任何云端写入前以 `0600` 权限原子保存到 `data/worker/<账号 ID>/<Worker 名称>.json`。创建或复用 `CALENDAR_KV`，随后保存 namespace ID。重复运行复用令牌和缓存，不改变订阅地址。
-4. 自动生成忽略的本地部署配置 `data/worker/<账号 ID>/<Worker 名称>.wrangler.json`，无需手填 namespace ID。通过 Wrangler 将代码和四个 Secrets 一起部署：`PKU_USERNAME`、`PKU_PASSWORD`、`PKU_UNSCHEDULED_COURSES`、`CALENDAR_TOKEN`。无确认项时写入 `[]`，清除远端旧列表；不会上传整个 `.env` 或 Pages 令牌。
+4. 自动生成忽略的本地部署配置 `data/worker/<账号 ID>/<Worker 名称>.wrangler.json`，无需手填 namespace ID。通过 Wrangler 将代码和五个 Secrets 一起部署：`PKU_USERNAME`、`PKU_PASSWORD`、`PKU_UNSCHEDULED_COURSES`、`PKU_COURSE_SUPPLEMENTS`、`CALENDAR_TOKEN`。无确认项时写入 `[]`，无补充配置时写入 `null`，清除远端旧配置；不会上传整个 `.env` 或 Pages 令牌。
 5. 检查云端 `workers.dev` 路由，使用 GET 请求验证日历格式、`fresh` 缓存状态、生成时间及错误令牌 `404`；验证成功后在本机输出完整订阅 URL。验证仅在内存读取 ICS，不打印或保存课表。
 
 订阅地址形如 `https://pku2cal.<你的子域名>.workers.dev/calendar/<令牌>.ics`。**持有完整地址即可访问课表，请保密。** 一键初始化仅供本机使用，拒绝在 CI 中运行；不要求先推送 GitHub，也不修改已有 Pages。
 
-修改代码、校历、时间表、密码或课程确认列表后，重新运行同一命令即可。默认校历路径可通过 `.env` 或系统环境变量 `PKU_CONFIG_PATH` 覆盖。校历和时间表在构建时嵌入，改变后需重新部署。想用其他 Worker 名称，可运行：
+修改代码、校历、时间表、密码、课程确认列表或补充配置后，重新运行同一命令即可。默认校历路径可通过 `.env` 或系统环境变量 `PKU_CONFIG_PATH` 覆盖。校历和时间表在构建时嵌入，改变后需重新部署。想用其他 Worker 名称，可运行：
 
 ```sh
 npm run worker:setup -- --deploy --account <账号ID> --name pku2cal-test
@@ -175,7 +175,7 @@ npm run token
 npx wrangler secret put CALENDAR_TOKEN
 ```
 
-运行 `npm run token` 后，将生成的随机令牌作为 `CALENDAR_TOKEN` 输入。如有已确认的无固定时间课程，还需在部署前运行 `npx wrangler secret put PKU_UNSCHEDULED_COURSES`，输入[确认列表](#确认无固定时间课程)的 JSON。
+运行 `npm run token` 后，将生成的随机令牌作为 `CALENDAR_TOKEN` 输入。如有已确认的无固定时间课程，还需在部署前运行 `npx wrangler secret put PKU_UNSCHEDULED_COURSES`，输入[确认列表](#确认无固定时间课程)的 JSON。如需补教室或新增课程，按[私密课程补充配置](#私密课程补充配置)设置 `PKU_COURSE_SUPPLEMENTS` Secret。
 
 配置完成后部署：
 
@@ -185,7 +185,7 @@ npm run worker:deploy
 
 持有 `https://<worker-host>/calendar/<token>.ics` 即可读取日历，请将完整地址作为秘密保管。令牌轮换后旧地址返回 `404`，客户端需更新订阅地址。部署命令会实际发布；本项目的自动验证只执行 dry-run。
 
-本地开发可在忽略的 `.dev.vars` 中配置三个 Secrets，运行 `npm run worker:dev`。本地 KV 数据位于忽略的 `.wrangler/`。Wrangler 日志及云端观测不要启用记录完整请求 URL 的选项；配置默认关闭 Worker observability。
+本地开发可在忽略的 `.dev.vars` 中配置账号、密码和令牌，以及可选的课程确认与补充 Secrets，运行 `npm run worker:dev`。本地 KV 数据位于忽略的 `.wrangler/`。Wrangler 日志及云端观测不要启用记录完整请求 URL 的选项；配置默认关闭 Worker observability。
 
 KV 不持久化登录会话，仅保存最近成功的 ICS、生成时间和配置指纹。缓存按账号、学期、有效配置隔离；密码或订阅令牌轮换不会改变缓存身份。旧副本没有自动删除期限，需要撤销保留时自行删除对应 KV 数据或 namespace。
 
@@ -280,6 +280,66 @@ npm run generate -- --config data/calendar.json --output data/calendar.ics
 
 本地内联写法为 `PKU_UNSCHEDULED_COURSES='[{"semester":"...",...}]'`，外层单引号用于包住完整 JSON。文件来源与非空内联值不能同时使用，校历和外部来源也不能同时提供列表。未设置任何来源表示没有外部确认项。文件路径选项仅用于本地生成；部署时将文件内容保存为 Secret。确认列表加入有效配置指纹，因此修改确认项会隔离旧缓存。
 
+### 私密课程补充配置
+
+可以为已有课程补教室，或添加系统课表中完全没有的课程。本功能不修改已有课程的上课时间，也不给已有课程增加时段。每门课程统一使用一个教室，手动教室优先于系统值。
+
+将以下合成示例按实际情况填写，保存为 **`data/course-supplements.json`**（已被 Git 忽略）：
+
+```json
+{
+  "semester": "2026-2027-1",
+  "locations": [
+    {
+      "courseId": "SYN001",
+      "classId": "01",
+      "location": "示例楼 101"
+    }
+  ],
+  "courses": [
+    {
+      "courseId": "SYN003",
+      "classId": "01",
+      "name": "示例单周课程",
+      "teacher": "示例教师",
+      "location": "示例楼 202",
+      "slots": [
+        {
+          "weekday": 3,
+          "startPeriod": 5,
+          "endPeriod": 7,
+          "weeks": { "start": 1, "end": 16, "parity": "odd" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `semester` 必须匹配校历；`locations`、`courses` 都必须填写，无相应配置时使用空数组 `[]`。
+- `locations` 按真实课程号、班号匹配已有课程，覆盖该课程所有时段的教室。两种编号均为字符串，保留前导零；不要按课程名称匹配。课程本次未出现时忽略其覆盖，不会把已退选课程加回。
+- `courses` 添加整门缺失课程。课程号、班号、名称及至少一个时段必填，教师和教室可省略。新增课程在自身的 `location` 填教室，不应同时出现在 `locations` 中。
+- `weekday` 为 1–7（周一至周日），`startPeriod` / `endPeriod` 使用所选时间表的节次，包含首尾。多个时段分别填写在 `slots` 中，统一沿用校历的停课和补课规则。
+- `weeks` 包含首尾教学周；`parity` 必填，为 `all`（每周）、`odd`（单周）或 `even`（双周）。单周按教学周第 1、3、5…周计算，不是全年周数。周数不得超出校历范围，筛选后不能没有上课周。
+
+在 `.env` 中配置并重新生成：
+
+```dotenv
+PKU_COURSE_SUPPLEMENTS_FILE=data/course-supplements.json
+```
+
+```sh
+npm run generate
+```
+
+也可使用 `npm run generate -- --supplements data/course-supplements.json`，该路径优先于环境变量路径；或在 `PKU_COURSE_SUPPLEMENTS` 中提供完整 JSON。文件与非空内联值不能同时设置。未设置、空白内联值、JSON `null` 或当前学期的两个空数组均表示无补充；`npm run status` 仍只检查公共校历，不验证课程补充或登录获取课表。
+
+**部署后生效：** 一键 Pages／Worker 初始化会读取同一份私密文件，并将内容上传为 `PKU_COURSE_SUPPLEMENTS` Secret；修改后重新运行对应初始化命令。没有本地补充时会上传 `null` 清除远端旧补充。Pages 须先推送支持该功能的代码和工作流；私密 JSON 不提交。手动管理时，将完整 JSON 设置为 Actions Secret，或运行 `npx wrangler secret put PKU_COURSE_SUPPLEMENTS`；Worker 本地开发可在 `.dev.vars` 配置该变量。手动清除远端补充时将 Secret 设为 `null`。补充配置不写进公共校历，也不打包进 Worker。
+
+手动课程后来出现在系统课表中（课程号、班号相同），会报 `supplements:conflict` 停止更新。核对系统安排后，从 `courses` 移除该课程；需要继续手动指定教室时改放到 `locations`。手动课程与无固定时间确认列表重复也须先复核。教室修改不改变 UID；手动与系统来源的课程身份、原日期和节次相同时沿用相同 UID。
+
+错误不会覆盖本地 ICS 或 Pages 部署。Worker 的补充内容参与缓存指纹，修改后不会读取旧配置缓存；生成失败时仅能返回同配置的旧副本，否则返回 `503`。仅调整配置数组顺序不影响缓存。上游失败时不会只发布手动课程。
+
 ## 故障排查
 
 日志仅含阶段、错误类别和耗时，不包含原始异常或个人数据。
@@ -294,6 +354,9 @@ npm run generate -- --config data/calendar.json --output data/calendar.ics
 | `semester:not_started` / `semester:expired` | 尚未进入或已经离开人工绑定的允许生成日期范围 |
 | `schedule:time` / `schedule:weeks` / `schedule:periods` | 上课时间无法识别、周数越界或节次配置不足 |
 | `schedule:unscheduled_changed` / `schedule:unscheduled_has_time` | 已确认课程的说明改变或含固定时段，需要重新核对，不能继续忽略 |
+| `supplements:invalid` | 私密来源冲突、JSON 字段／学期／教学周／节次无效 |
+| `supplements:conflict` | 手动课程与系统课程、教室覆盖或无固定时间确认重复，需人工复核 |
+| `supplements:duplicate` | 手动课程包含同一教学周、星期及节次的重复事件 |
 | `configuration:invalid` | 校历字段、日期或停补课冲突 |
 | Worker `200` + `X-Calendar-Status: stale` | 刷新失败或已超出生成有效期，仍提供旧版；`Last-Modified` 为旧版生成时间 |
 | Worker `503` | 配置不可用或刷新失败且同配置无可用副本 |

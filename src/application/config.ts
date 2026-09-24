@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { courseSupplementsSchema, SupplementError, validateCourseSupplements } from '../schedule/supplements.js';
 import { addDays, dateEpoch } from '../schedule/time.js';
 
 const date = z.string().refine(value => { try { dateEpoch(value); return true; } catch { return false; } });
@@ -28,6 +29,7 @@ const calendarFields = z.strictObject({
 const periods = z.array(z.strictObject({ period: z.number().int().min(1).max(30), start: clock, end: clock })).min(1);
 // Keep canonical field order stable: Worker fingerprints include serialized config.
 const schema = calendarFields.omit({ holidays: true, makeups: true }).extend({
+  courseSupplements: courseSupplementsSchema.optional(),
   periods, holidays: calendarFields.shape.holidays, makeups: calendarFields.shape.makeups,
 });
 const timetableId = z.enum(['pku-main', 'pku-ss']);
@@ -79,7 +81,11 @@ export function validateConfig(input: unknown): CalendarConfig {
   const result = schema.safeParse(input);
   if (!result.success) throw new ConfigError();
   validatePeriods(result.data.periods);
-  return canonicalCalendarFields(result.data);
+  const config = canonicalCalendarFields(result.data);
+  const supplements = validateCourseSupplements(config.courseSupplements, config);
+  if (supplements) config.courseSupplements = supplements;
+  else delete config.courseSupplements;
+  return config;
 }
 
 function canonicalCalendarFields<T extends z.infer<typeof calendarFields>>(c: T): T {
@@ -111,4 +117,15 @@ export function configWithPrivateConfirmations(input: unknown, json: string | un
   let decisions: unknown;
   try { decisions = JSON.parse(json); } catch { throw new ConfigError(); }
   return validateConfig({ ...config, unscheduledCourses: decisions });
+}
+
+/** Supplements only enter the resolved runtime config, never public calendar JSON. */
+export function configWithPrivateSupplements(input: unknown, json: string | undefined): CalendarConfig {
+  const config = validateConfig(input);
+  if (json === undefined || json.trim() === '') return config;
+  if (config.courseSupplements !== undefined) throw new SupplementError('invalid');
+  let parsed: unknown;
+  try { parsed = JSON.parse(json); } catch { throw new SupplementError('invalid'); }
+  const supplements = validateCourseSupplements(parsed, config);
+  return supplements ? validateConfig({ ...config, courseSupplements: supplements }) : config;
 }
