@@ -75,7 +75,7 @@ export async function main(): Promise<void> {
       'semester:expired': '该学期已超过生成有效期，旧文件已保留。请更新并选择新学期校历。',
       'semester:not_started': '尚未到达校历中的开始日期，暂不生成；可用 npm run status 查看。',
       'parse:semester': '上游学期缺失或与配置不符。请核实当前选课学期，并运行 npm run setup 选择对应校历。',
-      'schedule:periods': '课程涉及缺失节次，或连续节次映射后的时间倒序。请核对课表节次与所选时间表。',
+      'schedule:periods': '课程涉及缺失节次或无效节次范围。请核对课表节次与所选时间表。',
       'schedule:time': '存在无法识别时间的课程，未生成日历。请核实时间说明；确无固定时间的课程需单独确认。',
     };
     const message = error instanceof TimetableConfigError ? error.guidance : guidance[errorCategory(error)];

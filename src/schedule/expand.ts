@@ -35,13 +35,17 @@ export function expandCourses(courses: RawCourse[], config: ScheduleConfig): Cal
     if (isConfirmedUnscheduled(course, config.unscheduledCourses ?? [])) continue;
     for (const segment of course.segments) {
       const slot = parseTime(segment, config.teachingWeeks);
+      const mappedPeriods = [];
       for (let p = slot.startPeriod; p <= slot.endPeriod; p++) {
         const current = periods.get(p);
         if (!current) throw new ScheduleError('periods');
-        // A single mapped period is valid regardless of its number. A range
-        // must still run forward throughout, or its endpoints would omit time.
-        if (p > slot.startPeriod && periods.get(p - 1)!.end > current.start) throw new ScheduleError('periods');
+        mappedPeriods.push(current);
       }
+      // Period numbers identify the selected lessons; their mapped clock times
+      // determine the event bounds, including any remapped interior period.
+      mappedPeriods.sort((a, b) => a.start.localeCompare(b.start));
+      const startTime = mappedPeriods[0]!.start;
+      const endTime = mappedPeriods[mappedPeriods.length - 1]!.end;
       for (const week of slot.weeks) {
         const originalDate = addDays(config.firstMonday, (week - 1) * 7 + slot.weekday - 1);
         const identity = JSON.stringify([config.namespace, config.semester, course.courseId, course.classId, originalDate, slot.weekday, slot.startPeriod, slot.endPeriod]);
@@ -52,8 +56,8 @@ export function expandCourses(courses: RawCourse[], config: ScheduleConfig): Cal
         if (!moved.has(originalDate) && (cancelled.has(date) || targets.has(date))) continue;
         events.push({
           uid: `${createHash('sha256').update(identity).digest('hex')}@pku2cal`, originalDate,
-          start: new Date(`${date}T${periods.get(slot.startPeriod)!.start}:00+08:00`).toISOString(),
-          end: new Date(`${date}T${periods.get(slot.endPeriod)!.end}:00+08:00`).toISOString(),
+          start: new Date(`${date}T${startTime}:00+08:00`).toISOString(),
+          end: new Date(`${date}T${endTime}:00+08:00`).toISOString(),
           summary: course.name, location: slot.location,
           description: `课程号：${course.courseId}\n班号：${course.classId}\n教师：${course.teacher}`,
         });

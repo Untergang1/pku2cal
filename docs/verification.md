@@ -81,3 +81,10 @@
 - 确认 Wrangler 4.137.0 在 `WRANGLER_LOG=info` 下会屏蔽 `auth token --json` 的标准输出，导致账号识别后解析空字符串失败；改为 `log`，同时保留输出捕获、日志脱敏和临时目录清理。
 - 新增使用合成 API Token 调用真实 Wrangler CLI 的离线回归，验证认证 JSON 可正常解析；不使用真实凭据或请求 Cloudflare。此用例纳入现有 macOS／Linux CI 测试命令。
 - 本地 Linux：`npm test -- tests/integration/worker-setup.test.ts` 的 43 项测试通过。macOS 尚待 CI 验证；本次修复未创建云端资源、上传 Secrets 或部署 Worker。
+
+## 软微跨节次时段修复（2026-09-24）
+
+- 按用户确认，保留第 8 节 13:00–13:50 和第 5–7 节原有映射；5–7 节应为 14:00–16:50，5–8 节应为 13:00–16:50，不重新编号。
+- Node、Pages 和 Worker 共用的时段展开逻辑改为读取范围内全部节次，按实际时间确定最早开始和最晚结束；保留缺失节次、重叠和重复事件检查，UID 仍由原始节次身份确定。
+- 合成回归覆盖实际软微表的 5–7、5–8、7–8 和含内部提前节次的 5–9 时段、ICS 起止时间、稳定 UID，以及 Node／Pages／Worker 输出一致性。本地 Linux 类型检查和 `npm test -- tests/integration/timetables.test.ts tests/unit/core.test.ts` 的 60 项测试通过；macOS 尚待 CI 验证。
+- 只读核对确认 Pages 最近成功发布使用本部时间表；后续使用软微配置的运行在 `pages:prepare` 阶段失败、部署跳过，线上继续提供旧日历。本次仅修复本地共用逻辑，未推送或重新部署任一入口。

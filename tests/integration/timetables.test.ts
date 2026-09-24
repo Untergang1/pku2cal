@@ -109,7 +109,7 @@ it.each(['pku-main', 'pku-ss'])('uses the selected %s table consistently in Node
   const dir = await directory();
   const output = join(dir, 'node.ics');
   const pem = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'pem' }).toString();
-  const html = timetable([{ course: { ...course, segments: id === 'pku-ss' ? [...course.segments, '1周 周五8节'] : course.segments } }]);
+  const html = timetable([{ course: { ...course, segments: id === 'pku-ss' ? [...course.segments, '1周 周三5~7节', '1周 周四5~8节', '1周 周五8节'] : course.segments } }]);
   const dependencies = { fetch: upstream(pem, html), now: () => now };
   const credentials = { username: 'synthetic', password: 'synthetic-password' };
   await generateFile({ config, output, credentials, dependencies });
@@ -159,9 +159,21 @@ it('maps period 8 to lunchtime, preserves its UID and keeps canonical number ord
   expect(() => expandCourses([{ ...course, segments: ['1周 周一5~7节'] }], config)).not.toThrow();
 });
 
-it.each(['7~8', '5~9'])('rejects time reversal inside a %s period range, even with increasing endpoints', async range => {
-  const { config } = await resolveCalendarConfig({ ...customSource, timetable: 'pku-ss' }, readSynthetic);
-  expect(() => generateFromHtml(timetable([{ course: { ...course, segments: [`1周 周一${range}节`] } }]), config, now)).toThrow('schedule:periods');
+it.each([
+  ['5~7', '06:00', '08:50'],
+  ['5~8', '05:00', '08:50'],
+  ['7~8', '05:00', '08:50'],
+  ['5~9', '05:00', '10:50'],
+])('uses all mapped clock times for the actual SS %s period range', async (range, start, end) => {
+  const { config } = await resolveCalendarConfig({ ...customSource, timetable: 'pku-ss' });
+  const mapped = { ...course, segments: [`1周 周一${range}节`] };
+  const event = expandCourses([mapped], config)[0]!;
+  expect(event).toMatchObject({ start: `2026-09-07T${start}:00.000Z`, end: `2026-09-07T${end}:00.000Z` });
+  const chronological = { ...config, periods: config.periods.map(p => p.period === 8 ? { ...p, start: '17:00', end: '17:50' } : p) };
+  expect(event.uid).toBe(expandCourses([mapped], chronological)[0]!.uid);
+  const ics = generateFromHtml(timetable([{ course: mapped }]), config, now).ics;
+  expect(ics).toContain(`DTSTART:20260907T${start!.replace(':', '')}00Z`);
+  expect(ics).toContain(`DTEND:20260907T${end!.replace(':', '')}00Z`);
 });
 
 it('still rejects real overlap between non-adjacent period numbers', async () => {
