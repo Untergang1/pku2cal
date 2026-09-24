@@ -1,187 +1,196 @@
 # pku2cal
 
-将北京大学个人课表手动导入为可编辑 YAML，再生成 ICS，导入或订阅到 Apple Calendar 等日历应用。
+**把北大课表放进你常用的日历。**
 
-**`data/schedule.yaml` 是唯一课程数据源。** 生成与发布以你编辑后的文件为准，不登录北大、不覆盖课表。只有显式拉取会获取选课系统的数据；没有定时获取或订阅请求触发的刷新。
+pku2cal 可以从北京大学选课系统读取你的主修课表，生成可导入 Apple Calendar 等日历应用的 ICS 文件，也可以通过 GitHub Pages 或 Cloudflare Worker 发布订阅地址。你可以先修改课程、教室或上课时间，再生成自己的日历。
 
-支持教学周、单双周、同一课程多个时段、独立教室和校历停补课。时间按 `Asia/Shanghai` 解释。提供 GitHub Pages 和 Cloudflare Worker 两种固定地址订阅，内容仅在手动发布后更新；客户端按自身刷新机制获取。
+项目支持教学周、单双周、同一课程的多个上课时段，以及校历中配置的停补课安排；已内置校本部和软件与微电子学院两套作息时间表，并对软微选课系统中的第 8 节做了时间映射调整。
 
-## 安装与首次使用
+课表由你手动获取和更新。选课结果发生变化后，需要重新获取或编辑本地课表，再生成或发布；日历订阅本身不会触发课表更新。北大账号密码只用于本机获取课表，不上传到发布平台。
 
-macOS、Linux 使用 Node.js 22（至少 22.12）与 npm：
+[选择使用方式](#选择使用方式) · [第一次使用](#第一次使用) · [订阅到日历](#订阅到日历) · [更新课表](#课表变化后怎么更新) · [常见问题](#常见问题与更多说明)
+
+## 选择使用方式
+
+| 方式 | 你会得到什么 | 课表变化后 | 发布与隐私 |
+| --- | --- | --- | --- |
+| 本地 ICS 文件 | 可直接导入日历的文件 | 重新生成，在日历应用中处理旧课程后导入新文件 | 无需发布到网站；文件及导入后的日历按你使用的应用设置保存或同步 |
+| GitHub Pages | 固定的日历订阅地址 | 手动发布，等待日历应用刷新 | 课表公开可访问，发布产物也有暴露风险，详见下文 |
+| Cloudflare Worker | 固定的日历订阅地址 | 手动部署，等待日历应用刷新 | 完整地址持有者可读取课表；不经过 Pages 的 Actions 发布产物流程 |
+
+可以先生成本地文件，确认课程与时间正确后再决定是否发布订阅。两种订阅方式都需要保密完整地址。
+
+## 第一次使用
+
+### 1. 获取项目并安装依赖
+
+支持 macOS 和 Linux，需要 Git、Node.js 22（至少 22.12）及 npm。打开终端，运行：
 
 ```sh
+git clone https://github.com/Untergang1/pku2cal.git
+cd pku2cal
 npm ci
-npm run setup
+```
+
+如果准备使用 GitHub Pages，请先在 GitHub 上 Fork 本项目到自己的账号，再将上面的克隆地址换成自己的仓库地址。后续命令均在项目目录中运行。
+
+### 2. 确认学期与作息时间
+
+仓库已附带 `config/calendar.json`。先查看当前配置：
+
+```sh
 npm run status
 ```
 
-`setup` 选择已收录的官方校历，写入 `config/calendar.json`；已有不同配置不会覆盖。`status` 显示所选学期、作息时间表及当前是否允许拉取。请先在选课系统确认账号的当前学期；系统日期不能代替这一步。
+请在选课系统中确认账号的当前学期，与命令显示的学期一致。系统日期和“可以拉取”的提示不能代替这一步。
 
-复制 `.env.example` 为 `.env`，填写 `PKU_USERNAME` 和 `PKU_PASSWORD`。凭据仅用于手动导入，系统环境变量优先于 `.env`。扫码或交互验证暂不支持。`.env`、`data/`、ICS、构建产物均由 Git 忽略，不要提交个人数据。
+当前收录的是**校本部 2026–2027 第一学期校历**，仓库附带的配置选择了**软微作息**。打开 `config/calendar.json`，按自己的课程修改 `timetable` 字段，再运行 `npm run status` 核对：
+
+| 适用作息 | `timetable` 的值 |
+| --- | --- |
+| 北京大学校本部 | `"pku-main"` |
+| 软件与微电子学院 | `"pku-ss"` |
+
+一份课表统一使用一套作息。**切换作息不会改变学期日期、假期或补课安排**；其他学期、校区或学院的校历差异需要另行核对和调整，见[校历配置](docs/advanced.md#校历配置)。如果配置文件不存在，可运行 `npm run setup` 创建校本部预设；该命令不会覆盖已有的不同配置。
+
+两套内置时间表如下，均按北京时间（`Asia/Shanghai`）解释：
+
+| 节次 | 校本部 | 软件与微电子学院 |
+| --- | --- | --- |
+| 1 | 08:00–08:50 | 08:30–09:20 |
+| 2 | 09:00–09:50 | 09:30–10:20 |
+| 3 | 10:10–11:00 | 10:30–11:20 |
+| 4 | 11:10–12:00 | 11:30–12:20 |
+| 5 | 13:00–13:50 | 14:00–14:50 |
+| 6 | 14:00–14:50 | 15:00–15:50 |
+| 7 | 15:10–16:00 | 16:00–16:50 |
+| 8 | 16:10–17:00 | **13:00–13:50** |
+| 9 | 17:10–18:00 | 18:00–18:50 |
+| 10 | 18:40–19:30 | 19:00–19:50 |
+| 11 | 19:40–20:30 | 20:00–20:50 |
+| 12 | 20:40–21:30 | 21:00–21:50 |
+
+**软微第 8 节的特殊处理**
+
+软微时间表将选课系统中的第 8 节映射为 **13:00–13:50**，第 5–7 节仍为 **14:00–16:50**。这是根据实际观察对选课系统课时所做的手动映射，尚未经官方资料独立核实，请结合自己的课程安排确认。
+
+连续节次会读取范围内每一节的实际时间，取最早开始和最晚结束，包含中间的课间间隔。因此，在当前映射下，5–8 节、7–8 节都会生成 **13:00–16:50** 的事件。时间表来源和调整依据见[参考资料](docs/reference.md#时间语义与校历)。
+
+### 3. 填写本地登录信息
+
+```sh
+cp .env.example .env
+```
+
+用文本编辑器打开 `.env`，填写 `PKU_USERNAME` 和 `PKU_PASSWORD`。这些信息只用于手动获取课表；当前不支持扫码登录或需要交互的验证。
+
+`.env`、`data/`、生成的 ICS 和构建产物已被 Git 忽略。请保留这些忽略规则，不要强制提交个人数据，也不要分享含有凭据的文件或截图。
+
+### 4. 获取课表并生成日历
 
 ```sh
 npm run schedule:pull
-# 编辑 data/schedule.yaml
+```
+
+课表保存到 `data/schedule.yaml`。这是可以用文本编辑器修改的文件：你可以调整教室、删除课程，或补充上课时段。字段说明与示例见[编辑课表](docs/advanced.md#编辑课表)。
+
+确认课表后，检查并生成日历：
+
+```sh
 npm run schedule:check
 npm run generate
 ```
 
-生成结果为 `data/calendar.ics`。可以直接导入日历应用；直接导入的文件不会自动更新。
+生成结果为 `data/calendar.ics`。在日历应用中使用“导入”功能选择该文件，并核对几门课程的日期和时间。建议导入到一个单独的课程日历中，便于后续管理。
 
-## 编辑课表
+如果检查提示存在 `pending`，表示有上课时间需要人工确认。请先[处理待确认时段](docs/advanced.md#处理待确认时段)，再生成日历。
 
-示例见 [config/schedule.example.yaml](config/schedule.example.yaml)：
+## 订阅到日历
 
-```yaml
-version: 1
-semester: "2026-2027-1"
-courses:
-  - courseId: "00123456"
-    classId: "01"
-    name: 示例课程
-    teacher: 示例教师
-    slots:
-      - status: scheduled
-        weekday: 1
-        startPeriod: 1
-        endPeriod: 2
-        weeks: "1-8,10-16"
-        parity: all
-        location: 示例教室
-```
+发布成功后，命令会在本机终端输出订阅地址。在支持 ICS 订阅的日历应用中，选择“订阅日历”或“从 URL 添加日历”，粘贴完整地址。**导入文件和订阅地址是两种用法**：导入后的文件不会随发布更新，订阅则由日历应用定期获取已发布的内容。
 
-- `courseId`、`classId` 必须是字符串；数字形式用引号，保留前导零。课程号和班号组合唯一。手动加课可使用 `manual-` 前缀的课程号。
-- `weekday` 为 1–7（周一至周日）；节次按公共校历所选作息表解释，不直接填写钟点。
-- `weeks` 是字符串，使用数字、闭区间和英文逗号，如 `"1-8,10-16"`。`parity` 为 `all`、`odd` 或 `even`，按教学周编号筛选。
-- 每个时段单独填写 `location`，可以为空字符串。同一课程多个时段放在 `slots` 中。教师没有信息时填写空字符串。
-- 改课程名、教师、教室或调整排列不改变事件 UID；改星期、节次或课程身份时，订阅快照移除旧事件并添加新事件。
-- 删除课程即可取消；`courses: []` 是合法空课表，发布后可清除订阅中的全部课程。
-- 允许注释；不支持未知字段、标签、锚点、别名或重复字段。检查报告提供字段路径或 YAML 行列，不打印课表内容。
+### GitHub Pages
 
-拉取无法识别的时段会保留原文：
+#### 发布前了解隐私风险
 
-```yaml
-slots:
-  - status: pending
-    sourceText: 原始时间说明
-```
+**请把 Pages 上的课表视为公开可访问的数据。** 它包含上课时间、地点等个人安排；任何持有完整订阅地址的人，无需登录即可读取。
 
-把它改为完整的 `scheduled` 时段，或人工确认无需生成事件后改为：
+风险也不只来自链接泄露：Pages 部署会上传一份包含课表和令牌路径的 Actions 发布产物（artifact）。对于公开仓库，登录 GitHub 的用户可以在保留期内下载这份产物，从中取得课表及订阅地址中的令牌。访问条件见 [GitHub 官方说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)。
 
-```yaml
-slots:
-  - status: ignored
-    sourceText: 原始时间说明
-    reason: 已确认无固定上课时间
-```
+项目目前采取了以下措施来减少风险：
 
-同一课程可以有已解析和待处理时段。有任意 `pending` 时，检查、生成及发布都会失败；不会静默漏掉课程。`ignored` 必须填写原因。
+- 使用随机生成的长令牌作为地址的一部分，降低地址被猜中的可能。
+- 凭据、个人课表文件、ICS 和本地令牌状态默认不加入 Git；发布内容与令牌通过 GitHub Secret 传递，北大凭据留在本机。
+- 在 Actions 日志中遮蔽令牌，将发布产物的保留期设为一天。
+- 仅手动发布；课表内容未变化时，跳过新的产物上传与部署。
+- 支持轮换令牌，新部署会移除旧地址对应的文件。
 
-所有正常命令只读课表，保留注释。`importedAt` 是可选的导入时间，不参与 UID。
+这些措施**不能让 Pages 成为私有存储**。一天保留期只针对发布产物，不表示线上日历一天后下线；轮换令牌也无法收回已被下载的课表，旧地址的 CDN 缓存可能延迟失效。
 
-## 重新拉取与文件保护
+#### 发布步骤
 
-```sh
-npm run schedule:pull -- --overwrite
-```
-
-此命令完整替换课表，**会覆盖手工修改，不合并旧文件**。不带 `--overwrite` 时，已有文件会在登录前拒绝覆盖。
-
-获取、解析成功后，旧文件原样备份到 `data/backups/`，然后原子替换。备份、登录、页面完整性、学期检查失败或发现拉取期间文件被编辑时，不替换当前课表。备份不自动删除；文件权限为 `0600`。不要在拉取运行期间编辑文件。
-
-自定义路径：
-
-```sh
-npm run schedule:pull -- --config config/calendar.json --output data/custom.yaml
-npm run schedule:check -- --config config/calendar.json --schedule data/custom.yaml
-npm run generate -- --config config/calendar.json --schedule data/custom.yaml --output data/custom.ics
-```
-
-两个发布命令同样接受 `--config`、`--schedule`。缺少 YAML 会提示先拉取，绝不隐式联网获取课表。
-
-## 校历与作息时间
-
-个人 YAML 只保存课程；学期、首周周一、教学周数、作息表、停课日期、补课映射继续放在公共校历中。YAML 和校历的学期必须一致。
-
-仓库提供校本部 2026–2027 第一学期校历及 `pku-main`、`pku-ss` 两套节次表。其他学期和校区需核对官方校历；选择软微作息不会改变学期日期或假期。
-
-```sh
-npm run setup -- --semester 2026-2027-1 --output data/calendar.json
-```
-
-`semesterBinding` 的日期窗口仅限制向选课系统拉取数据，本地课表在学期结束后仍可生成、发布和订阅。没有绑定时，拉取要求上游明确给出匹配学期；上游学期矛盾始终拒绝。
-
-一份课表统一使用一套作息。节次范围包含其中全部编号，按实际时间取最早开始和最晚结束，保留课间间隔；软微第 8 节早于 5–7 节的情况也适用。停课移除当日课程；补课映射为“目标日期 → 原教学日期”，替换目标日课表，原事件身份保持不变。详细规则见[系统设计](docs/design.md)。
-
-## GitHub Pages 手动发布
-
-**Pages 的完整链接持有者可以访问课表。** 公开仓库的登录用户还可能下载保留期内的 Actions artifact；artifact 保留一天。令牌路径降低被猜到的风险，不改变这些访问边界。
-
-安装并登录 [GitHub CLI](https://cli.github.com/)，将代码提交并手动推送到自己的 GitHub 仓库默认分支：
+准备好自己的 GitHub 仓库，安装 [GitHub CLI](https://cli.github.com/)，并登录：
 
 ```sh
 gh auth login
+```
+
+发布前，将需要版本管理的项目改动（例如作息配置）提交并推送到自己的仓库默认分支，保持工作区干净。`origin` 的读取和推送地址都应指向该仓库，本地提交须与远端默认分支一致；个人课表等已忽略文件不需要提交。
+
+以下以默认分支 `main` 为例；分支名不同时请替换：
+
+```sh
 git push origin main
 npm run pages:publish
 ```
 
-运行命令即表示公开发布当前本地课表。命令会：
+命令会从当前本地课表生成日历、配置 Pages、上传发布内容并等待 Actions 完成，然后输出订阅地址。无需手工创建令牌或 Secret，也无需在 GitHub 网页中运行工作流。
 
-1. 校验 YAML 和校历，在本机生成完整 ICS，不使用可能过时的本地 ICS 文件。
-2. 检查工作区干净、`origin` 读写目标一致、本地 HEAD 等于远端默认分支；不自动提交或推送。
-3. 初始化或复用 Pages 及 `data/pages/<owner>/<repo>.json` 中的订阅令牌。
-4. 将令牌、ICS 和生成时间作为单个 gzip/Base64 快照上传到 `PAGES_CALENDAR_SNAPSHOT` Secret，手动触发并跟踪本次 Actions 运行。
-5. 工作流检查快照摘要、比较线上日历；有效内容相同则跳过部署，有变化才发布并输出订阅 URL。
+请私密备份 `data/pages/`，以便换电脑后继续使用同一地址。强制发布、轮换令牌及故障处理见 [Pages 进阶操作](docs/advanced.md#github-pages-进阶操作)。
 
-个人 YAML 不上传至 Git，云端不登录北大。快照编码上限为 45 KiB，解压后上限为 2 MiB；超限会停止，不自动拆分或转存仓库。手动工作流需要 `snapshot_id`，推荐始终通过本机命令触发；GitHub 界面无法获取你尚未发布的本地编辑。
+### Cloudflare Worker
 
-支持实际 Pages 路径和自定义域名。初始化只用于本机，默认最多等待 15 分钟；超时不取消远端任务。线上比较的网络异常、非 200/404 响应或损坏日历都会停止发布，旧站点保留。
-
-```sh
-npm run pages:publish -- --force-publish
-npm run pages:publish -- --rotate-token
-```
-
-强制发布跳过线上比较。轮换复用原站点但更换地址并强制发布，旧路径随新部署移除；CDN 缓存可能延迟失效。备份 `data/pages/`；本地令牌丢失而远端已有 Secret 时，恢复文件或显式轮换，不能从 GitHub 读回 Secret。
-
-## Cloudflare Worker 手动部署
-
-先在 Cloudflare 设置 `workers.dev` 子域名，并登录：
+准备好 Cloudflare 账号，并在控制台设置 `workers.dev` 子域名。在项目目录登录并部署：
 
 ```sh
 npx wrangler login
 npm run worker:deploy
 ```
 
-命令从本地 YAML 生成 ICS，完成不发布构建检查，再通过 Wrangler 将快照随代码部署。Worker 仅返回这份快照，不访问选课系统、不创建或使用 KV；唯一必需 Secret 为 `CALENDAR_TOKEN`。修改 YAML 后再次部署即可更新。
+命令会从当前本地课表生成日历，先完成不发布的构建检查，再部署并验证线上内容。成功后输出形如 `https://<worker>.workers.dev/calendar/<令牌>.ics` 的订阅地址。
 
-首次初始化会保存 `data/worker/<账号 ID>/<Worker 名称>.json`，复用已有令牌；成功验证线上快照内容及错误令牌 404 后，输出 `https://<worker>.workers.dev/calendar/<令牌>.ics`。持有完整地址即可读取课表，请保密。
+Worker 提供你本次部署的日历，不访问选课系统。它不经过 Pages 的 Actions 发布产物流程，但**持有完整订阅地址的人仍然可以读取课表**，请保密。
 
-```sh
-npm run worker:deploy -- --account <账号ID> --name pku2cal
-npm run worker:deploy -- --rotate-token
-```
+请私密备份 `data/worker/`，以便复用令牌。多账号、Worker 命名、轮换令牌及故障处理见 [Worker 进阶操作](docs/advanced.md#cloudflare-worker-进阶操作)。
 
-多个账号时明确选择 `--account`，也支持 shell 中的 `CLOUDFLARE_ACCOUNT_ID`；认证使用 Wrangler OAuth 或 shell 中的 `CLOUDFLARE_API_TOKEN`。当前入口面向默认 `workers.dev`，不支持自定义域名、环境或额外绑定。
+## 课表变化后怎么更新
 
-请私密备份 `data/worker/`。令牌丢失和损坏不会被自动覆盖；轮换失败后普通重跑复用已保存的新令牌。部署成功但验证失败会明确报错，不自动回滚。
+只想修改教室、增删课程或调整时间时，编辑 `data/schedule.yaml`，然后运行 `npm run schedule:check`。检查、生成和发布都以这份本地文件为准，不会重新登录选课系统，也不会覆盖你的编辑。
 
-本地开发：在忽略的 `.dev.vars` 设置 `CALENDAR_TOKEN`，准备本地 YAML 后运行 `npm run worker:dev`。自定义构建输入可通过 `PKU_CONFIG_PATH`、`PKU_SCHEDULE_PATH` 指定；日常发布优先使用 CLI 参数。构建产物包含个人 ICS，不要提交或公开分享。
-
-## 验证与维护
+如果希望重新获取选课系统中的课表，运行：
 
 ```sh
-npm run typecheck
-npm run build
-npm test -- tests/unit/document.test.ts tests/integration/entrypoints.test.ts
-npm run worker:check
+npm run schedule:pull -- --overwrite
 ```
 
-CI 在 macOS、Linux 上使用相同安装、构建、测试与 Worker dry-run 命令；所有测试和 dry-run 使用合成数据，不依赖真实凭据。按变更运行相关测试即可，无需为小改动运行完整套件。
+**这会完整替换课表，覆盖手工修改，不与旧文件合并。** 替换前，旧课表会备份到 `data/backups/`；备份不会自动删除。不带 `--overwrite` 时，已有课表不会被覆盖。拉取运行期间请不要编辑课表文件。
 
-如果进程被强制终止，先确认没有运行中的命令，再清理对应 `.lock` 目录或 Worker `.run-*` 私密临时目录；正常完成或报错会自动清理。课表备份不会自动删除。
+修改或重新获取后，按使用方式更新：
 
-`npm run build` 会先清理 `dist` 子目录中已无对应源码的编译产物，保留有效输出和根目录 Worker bundle。缓存 `.cache/` 与依赖中的测试缓存可在没有运行中任务时删除；保留正在使用的 ICS、部署配置和私密状态。
+| 使用方式 | 下一步 |
+| --- | --- |
+| 本地文件 | 运行 `npm run generate`，在日历应用中处理旧课程后重新导入 `data/calendar.ics`，避免重复导入 |
+| Pages 订阅 | 运行 `npm run pages:publish` |
+| Worker 订阅 | 运行 `npm run worker:deploy` |
 
-实现和验收边界见[系统设计](docs/design.md)及[验证边界](docs/verification.md)，上游资料与时间表依据见[参考资料](docs/reference.md)。
+两个发布命令都会重新生成日历，不需要事先运行 `generate`。发布后，日历应用按自身的刷新机制获取更新，可能不会立即显示变化。
+
+## 常见问题与更多说明
+
+- **遇到 `pending`，无法生成？** 有上课时间未被识别，需人工补全或确认忽略，见[处理待确认时段](docs/advanced.md#处理待确认时段)。
+- **提示学期不匹配或无法拉取？** 先核对选课系统学期与 `npm run status`；已有本地课表在学期结束后仍可生成与发布，见[校历配置](docs/advanced.md#校历配置)。
+- **运行 `setup` 提示配置已存在且不同？** 原文件已保留。查看 `status` 并编辑现有配置即可；需要另外创建配置时使用 `--output`，见[校历配置](docs/advanced.md#校历配置)。
+- **订阅链接泄露了？** 使用对应平台的 `--rotate-token` 重新发布，并在日历应用中换成新地址。轮换不能收回已经下载的数据，见 [Pages](docs/advanced.md#github-pages-进阶操作) / [Worker](docs/advanced.md#cloudflare-worker-进阶操作)。
+- **换电脑后如何保留订阅地址？** 私密恢复原来的 `data/pages/` 或 `data/worker/` 状态文件；不要将它们提交到仓库。缺失或损坏时的处理见上述平台进阶说明。
+
+更多资料：[进阶使用](docs/advanced.md) · [开发与维护](docs/development.md) · [系统设计](docs/design.md) · [验证边界](docs/verification.md) · [参考资料与时间表依据](docs/reference.md)。
